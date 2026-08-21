@@ -96,6 +96,27 @@ The number it exists to produce is the knee: where task success starts to fall.
 A run reporting 90% fewer tokens and 60% success is a worse tool than one
 reporting 70% fewer and 100%.
 
+### What the first baseline says
+
+`bench/results/retention-baseline.json`, three tasks against Sonnet 5, three runs
+per cell: **task success is 100% everywhere, and filtering costs more total model
+tokens than not filtering** in eight of nine cells — from 0.98x to 1.72x the raw
+control. Only one cell wins.
+
+The cause is in the tool, not the tasks. Traced with a real run: the agent runs
+the filtered command, reads the marker, and then runs `lens show <handle>
+--level 3`, which hands back the entire raw output. It pays for both views and an
+extra turn, and the 99.8% reduction on the way in buys nothing.
+
+So the marker is doing something the design did not intend. It reads as an
+instruction rather than an offer, and the level it names is the most expensive
+one there is. Whatever replaces it has to make asking for more a decision the
+reader takes deliberately, not the obvious next step — and the retention curve is
+how the replacement gets judged.
+
+This is the harness working. The compression looked excellent and the thing that
+matters was going the wrong way.
+
 ## Platform
 
 Linux is the verified target. macOS compiles and its branches are written but
