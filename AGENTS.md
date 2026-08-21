@@ -123,6 +123,20 @@ how the replacement gets judged.
 This is the harness working. The compression looked excellent and the thing that
 matters was going the wrong way.
 
+### The same curve, a different agent
+
+`bench/results/retention-cursor.json` runs the identical cells through a
+different agent and a different model family. Success is again 100% everywhere,
+and the token picture is not the same one: two of nine cells beat the control on
+one agent, four of nine on the other, and they disagree about which. On the trap
+task, level 2 costs 1.25x on one and 0.73x on the other.
+
+So a single-agent curve measures the agent's habits as much as the filter's
+quality — how readily it chases a marker, how much it re-reads. Any claim about
+this tool that rests on one agent's numbers is a claim about that agent. Both
+files are committed for that reason, and a change to ranking or to the marker is
+judged against both.
+
 ## Platform
 
 Linux is the verified target. macOS compiles and its branches are written but
