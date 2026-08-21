@@ -24,6 +24,10 @@ jobs:
           components: rustfmt
       - run: make check
       - run: make test
+      # Growth only. The committed latency baseline was recorded elsewhere, and
+      # gating a shared runner on another machine's microseconds produces
+      # failures that mean nothing.
+      - run: make bench
 
   macos:
     # macOS is a compiled placeholder, not a verified platform: this job catches

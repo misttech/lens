@@ -1,0 +1,72 @@
+{
+  "cargo_build_failure": {
+    "bytes": 25428,
+    "lines": 791,
+    "stages": {
+      "ansi": { "p50_us": 25, "p99_us": 28 },
+      "classify": { "p50_us": 324, "p99_us": 708 },
+      "context": { "p50_us": 17, "p99_us": 20 },
+      "dedupe": { "p50_us": 56, "p99_us": 60 },
+      "parse": { "p50_us": 30, "p99_us": 98 },
+      "progress": { "p50_us": 24, "p99_us": 30 },
+      "render": { "p50_us": 0, "p99_us": 1 }
+    },
+    "total": { "p50_us": 381, "p99_us": 438 }
+  },
+  "git_show_large": {
+    "bytes": 127839,
+    "lines": 3344,
+    "stages": {
+      "ansi": { "p50_us": 146, "p99_us": 195 },
+      "classify": { "p50_us": 878, "p99_us": 976 },
+      "context": { "p50_us": 83, "p99_us": 163 },
+      "dedupe": { "p50_us": 264, "p99_us": 341 },
+      "parse": { "p50_us": 212, "p99_us": 271 },
+      "progress": { "p50_us": 92, "p99_us": 106 },
+      "render": { "p50_us": 13, "p99_us": 24 }
+    },
+    "total": { "p50_us": 1320, "p99_us": 1396 }
+  },
+  "plain_unique": {
+    "bytes": 122353,
+    "lines": 4000,
+    "stages": {
+      "ansi": { "p50_us": 131, "p99_us": 160 },
+      "classify": { "p50_us": 1577, "p99_us": 1726 },
+      "context": { "p50_us": 71, "p99_us": 79 },
+      "dedupe": { "p50_us": 81, "p99_us": 170 },
+      "parse": { "p50_us": 154, "p99_us": 203 },
+      "progress": { "p50_us": 72, "p99_us": 93 },
+      "render": { "p50_us": 10, "p99_us": 12 }
+    },
+    "total": { "p50_us": 1746, "p99_us": 1917 }
+  },
+  "progress_ansi": {
+    "bytes": 2187,
+    "lines": 52,
+    "stages": {
+      "ansi": { "p50_us": 5, "p99_us": 7 },
+      "classify": { "p50_us": 1, "p99_us": 1 },
+      "context": { "p50_us": 1, "p99_us": 3 },
+      "dedupe": { "p50_us": 1, "p99_us": 2 },
+      "parse": { "p50_us": 2, "p99_us": 3 },
+      "progress": { "p50_us": 5, "p99_us": 8 },
+      "render": { "p50_us": 0, "p99_us": 0 }
+    },
+    "total": { "p50_us": 10, "p99_us": 12 }
+  },
+  "test_run_one_failure": {
+    "bytes": 30040,
+    "lines": 952,
+    "stages": {
+      "ansi": { "p50_us": 31, "p99_us": 33 },
+      "classify": { "p50_us": 356, "p99_us": 369 },
+      "context": { "p50_us": 17, "p99_us": 22 },
+      "dedupe": { "p50_us": 55, "p99_us": 58 },
+      "parse": { "p50_us": 40, "p99_us": 53 },
+      "progress": { "p50_us": 18, "p99_us": 19 },
+      "render": { "p50_us": 3, "p99_us": 4 }
+    },
+    "total": { "p50_us": 429, "p99_us": 444 }
+  }
+}
