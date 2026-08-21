@@ -1,0 +1,132 @@
+{
+  // This is a checked-in VSCode workspace configuration file.
+  //
+  // It's an opt-in workspace configuration that contains settings for:
+  //  - vscode itself
+  //  - working with the lens checkout and its milestone worktrees
+  //
+  // In terms of precedence, VSCode uses the following order in which settings
+  // are applied (merged together).
+  //
+  //  0) default settings
+  //  1) user's settings
+  //  2) remote machine settings
+  //  3) workspace settings  (this file)
+  //  4) workspace folder settings
+  //
+  // For details, see:
+  // https://code.visualstudio.com/docs/getstarted/settings#_settings-precedence
+
+  ////////
+  // VSCode Workspace Contents
+  //
+  // The primary checkout is folder 0 and stays first. Milestone worktrees are
+  // siblings (`../lens-<topic>`); add one entry per worktree you want visible
+  // and remove it when the branch merges. Keep paths relative so the workspace
+  // survives a clone into a different parent directory.
+  //
+  // See https://code.visualstudio.com/docs/editor/workspaces for more
+  // information on this section of the file.
+  "folders": [
+    {
+      // The primary checkout, which stays on main.
+      "name": "lens",
+      "path": "."
+    }
+    // Milestone worktrees created by `git worktree add` land beside it, e.g.
+    // { "name": "wt/pipeline", "path": "../lens-pipeline" },
+  ],
+
+  ////////
+  // Recommended Extensions for VSCode and lens
+  //
+  "extensions": {
+    "recommendations": [
+      "EditorConfig.EditorConfig",
+      "rust-lang.rust-analyzer",
+      "tamasfe.even-better-toml",
+      "yzhang.markdown-all-in-one",
+      "ms-python.python",
+      "charliermarsh.ruff"
+    ],
+
+    "unwantedRecommendations": []
+  },
+
+  "settings": {
+    ////////
+    // Extra file associations (patterns to languages)
+    "files.associations": {
+      "*.mk": "makefile"
+    },
+
+    // Matches the default Mist code style.
+    "editor.rulers": [100],
+
+    // Disable graph visualization of incoming/outgoing changes.
+    "scm.showHistoryGraph": false,
+
+    ////////
+    // Rust
+    //
+    // rust-analyzer must write where the Makefile writes, or a check-on-save
+    // race deadlocks against a `make build` on the cargo lock — and its
+    // artifacts end up outside out/, which is the only directory this repo
+    // builds into.
+    //
+    // rustfmt.toml uses imports_granularity, which is nightly-only, so format
+    // on save needs the nightly toolchain the Makefile's fmt target uses.
+    "rust-analyzer.cargo.targetDir": "out/.cargo/analyzer",
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.rustfmt.extraArgs": ["+nightly"],
+    "[rust]": {
+      "editor.defaultFormatter": "rust-lang.rust-analyzer",
+      "editor.formatOnSave": true
+    },
+
+    ////////
+    // Markdown
+    //
+    "[markdown]": {
+      // Matches how the docs in this tree are wrapped.
+      "editor.rulers": [80]
+    },
+
+    ////////
+    // Python — repository tooling is ruff-formatted, per ruff.toml.
+    //
+    "[python]": {
+      "editor.defaultFormatter": "charliermarsh.ruff",
+      "editor.formatOnSave": true,
+      "editor.rulers": [88]
+    },
+
+    ////////
+    // VSCode file exclusions
+    //
+
+    // Files that are marked as hidden in the Workspace Explorer.
+    "files.exclude": {
+      "**/.DS_Store": true,
+      "**/.git": true,
+      "**/__pycache__": true
+    },
+    "explorer.excludeGitIgnore": false,
+
+    // Files that are excluded from file-watching notifications. out/ holds
+    // every build artifact, so watching it is pure noise.
+    "files.watcherExclude": {
+      "**/.DS_Store": true,
+      "**/.git": true,
+      "**/__pycache__": true,
+      "out/**": true,
+      "**/.venv/**": true
+    },
+
+    // Files excluded from search results.
+    "search.exclude": {
+      "out/**": true,
+      "**/.venv/**": true
+    }
+  }
+}
