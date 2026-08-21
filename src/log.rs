@@ -131,6 +131,26 @@ pub struct RunRecord {
     /// Bytes the child wrote to stderr. Absent for passthrough.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub err_bytes: Option<u64>,
+    /// Lines the command produced, before filtering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_lines: Option<u64>,
+    /// Lines that reached the caller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_lines: Option<u64>,
+    /// Estimated tokens the command produced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_tok: Option<u64>,
+    /// Estimated tokens that reached the caller. The only reduction figure this
+    /// tool reports, and it is labelled as output tokens rather than as cost:
+    /// prompt caching and extra turns both break that inference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_tok: Option<u64>,
+    /// Which view the caller got.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<u8>,
+    /// Stages that ran, in order.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub stages: Vec<String>,
     /// Whether the output was emitted unfiltered.
     pub passthrough: bool,
     /// Why, when it was.
@@ -164,8 +184,9 @@ pub struct Record {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Body {
-    /// One invocation.
-    Run(RunRecord),
+    /// One invocation. Boxed because a run record is several times the size of
+    /// an event, and every event would otherwise carry that footprint.
+    Run(Box<RunRecord>),
     /// One diagnostic.
     Event(EventRecord),
 }
@@ -237,7 +258,7 @@ impl Logger {
 
     /// Record one invocation.
     pub fn run(&self, record: RunRecord) {
-        self.write(Level::Info, Body::Run(record));
+        self.write(Level::Info, Body::Run(Box::new(record)));
     }
 
     /// Record one diagnostic.
@@ -335,6 +356,10 @@ pub struct Stats {
     pub passthrough: u64,
     /// Total bytes the children produced.
     pub bytes: u64,
+    /// Estimated tokens the commands produced.
+    pub in_tok: u64,
+    /// Estimated tokens that reached the caller.
+    pub out_tok: u64,
     /// Per-command totals, sorted by count when rendered.
     pub by_command: std::collections::BTreeMap<String, u64>,
     /// Passthrough reasons and their counts.
@@ -359,6 +384,8 @@ pub fn aggregate(records: &[Record], since: Option<&str>, cmd: Option<&str>) -> 
 
         stats.runs += 1;
         stats.bytes += run.out_bytes.unwrap_or(0) + run.err_bytes.unwrap_or(0);
+        stats.in_tok += run.in_tok.unwrap_or(0);
+        stats.out_tok += run.out_tok.unwrap_or(0);
         *stats.by_command.entry(run.cmd.clone()).or_default() += 1;
         if run.passthrough {
             stats.passthrough += 1;
@@ -421,6 +448,12 @@ mod tests {
             dur_ms: (!passthrough).then_some(8),
             out_bytes: (!passthrough).then_some(100),
             err_bytes: (!passthrough).then_some(20),
+            in_lines: (!passthrough).then_some(12),
+            out_lines: (!passthrough).then_some(4),
+            in_tok: (!passthrough).then_some(300),
+            out_tok: (!passthrough).then_some(90),
+            level: (!passthrough).then_some(2),
+            stages: if passthrough { vec![] } else { vec!["ansi".into()] },
             passthrough,
             reason: passthrough.then(|| "mode_raw".to_string()),
         }
@@ -456,7 +489,7 @@ mod tests {
         let records = read_all(&dir.0, DEFAULT_MAX_FILES);
         assert_eq!(records.len(), 1);
         match &records[0].body {
-            Body::Run(run) => assert_eq!(run, &a_run("git", false)),
+            Body::Run(run) => assert_eq!(**run, a_run("git", false)),
             other => panic!("expected a run record, got {other:?}"),
         }
         assert!(records[0].t.ends_with('Z'));
@@ -645,9 +678,21 @@ mod tests {
     fn aggregation_counts_runs_and_passthroughs() {
         let now = rfc3339_utc(SystemTime::now());
         let records = vec![
-            Record { t: now.clone(), lvl: Level::Info, body: Body::Run(a_run("git", false)) },
-            Record { t: now.clone(), lvl: Level::Info, body: Body::Run(a_run("git", true)) },
-            Record { t: now.clone(), lvl: Level::Info, body: Body::Run(a_run("cargo", false)) },
+            Record {
+                t: now.clone(),
+                lvl: Level::Info,
+                body: Body::Run(Box::new(a_run("git", false))),
+            },
+            Record {
+                t: now.clone(),
+                lvl: Level::Info,
+                body: Body::Run(Box::new(a_run("git", true))),
+            },
+            Record {
+                t: now.clone(),
+                lvl: Level::Info,
+                body: Body::Run(Box::new(a_run("cargo", false))),
+            },
             Record {
                 t: now.clone(),
                 lvl: Level::Warn,
@@ -673,12 +718,12 @@ mod tests {
         let old = Record {
             t: "2020-01-01T00:00:00Z".into(),
             lvl: Level::Info,
-            body: Body::Run(a_run("git", false)),
+            body: Body::Run(Box::new(a_run("git", false))),
         };
         let new = Record {
             t: "2026-08-21T00:00:00Z".into(),
             lvl: Level::Info,
-            body: Body::Run(a_run("git", false)),
+            body: Body::Run(Box::new(a_run("git", false))),
         };
         let stats = aggregate(&[old, new], Some("2026-01-01T00:00:00Z"), None);
         assert_eq!(stats.runs, 1);

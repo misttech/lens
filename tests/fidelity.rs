@@ -103,8 +103,9 @@ fn raw_mode_is_byte_identical_to_running_the_command_directly() {
 
 #[test]
 fn binary_output_survives_unchanged() {
-    // Output is bytes, not text. A command emitting invalid UTF-8 must not have
-    // it replaced with U+FFFD on the way through.
+    // Output is bytes, not text. A stream that is not valid UTF-8 is passed
+    // through unfiltered rather than mangled into replacement characters —
+    // filtering it would mean guessing what its bytes mean.
     let script = r"printf '\001\002\377\000end'";
     let filtered = lens(&["sh", "-c", script]);
     let direct = bare(&["sh", "-c", script]);
@@ -167,9 +168,15 @@ fn version_and_help_answer_without_running_anything() {
 #[test]
 fn large_interleaved_output_completes() {
     // The deadlock this guards is a hang, so a failure here shows up as a test
-    // that never finishes rather than one that fails.
-    let out = lens(&["sh", "-c", "yes a | head -c 200000; yes b | head -c 200000 >&2"]);
+    // that never finishes rather than one that fails. Raw mode keeps it a test
+    // of the capture path: filtering would collapse 100,000 identical lines to
+    // one, which is correct and would hide what this is checking.
+    let out = Command::new(lens_bin())
+        .args(["sh", "-c", "yes a | head -c 200000; yes b | head -c 200000 >&2"])
+        .env("LENS_MODE", "raw")
+        .output()
+        .expect("run lens");
     assert_eq!(out.stdout.len(), 200_000);
     assert_eq!(out.stderr.len(), 200_000);
-    assert_eq!(code(&out), 0);
+    assert_eq!(out.status.code(), Some(0));
 }

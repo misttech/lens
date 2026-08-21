@@ -132,6 +132,23 @@ is no outcome to report. A placeholder would put fabricated exit codes into
 without argv, so a secret passed in an argument does reach the log. Output never
 does below `trace`, where it is capped at a short prefix.
 
+**A stream that is not valid UTF-8 is passed through unfiltered.** Filtering it
+would mean deciding what a byte sequence means, and Lens does not know — a
+tarball or a binary diff is content whose every byte matters. Mangling it into
+replacement characters to save tokens would break the command for the sake of
+reading it.
+
+**Levels 1 and 2 are subsets; level 0 is a different shape.** Asking for less
+detail gives you less output at 1 and 2. Level 0 reports counts instead of
+content, so on output with nothing worth showing it can be longer than level 1 —
+it is bounded by the raw view, not by the level above it.
+
+**Parsing carries a flag rather than rediscovering it.** Whether a block has an
+indented continuation is tracked as the block is built. Asking by scanning the
+block made parsing quadratic in block length, and a command that prints ten
+thousand unindented lines is one block: 40k lines took 451ms before the fix and
+2ms after.
+
 **A lens flag after the command name reaches the child.** `lens mytool --budget
 3` is a valid command line for `mytool`, and Lens does not reinterpret a command
 it was asked to run. An unknown flag *before* the command is an error rather
