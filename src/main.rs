@@ -1,42 +1,25 @@
 // Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Lens runs a real command, keeps its full output, and shows an AI coding agent
-//! the view of that output worth spending context on.
-//!
-//! The command runs, every byte it produced goes to a content-addressed store,
-//! and a filtered view of it reaches the caller. Anything left out of that view
-//! is announced with a marker carrying the handle, so a reader always knows the
-//! rest is a request away.
-
-mod adapters;
-mod cli;
-mod executor;
-mod log;
-mod pipeline;
-mod platform;
-mod render;
-mod resolve;
-mod static_assert;
-mod store;
-mod tokens;
+//! The `lens` binary: argument handling, process control, and the decisions
+//! that need an environment. Everything it filters with lives in the library.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-use crate::cli::{Invocation, Subcommand};
-use crate::log::{Level, Logger, RunRecord};
-use crate::pipeline::{Ctx, Stream};
-use crate::render::Level as ViewLevel;
-use crate::resolve::{PassthroughReason, Plan};
-use crate::store::Store;
-use crate::tokens::{Heuristic, TokenEstimator};
+use lens::cli::{Invocation, Subcommand};
+use lens::log::{Level, Logger, RunRecord};
+use lens::pipeline::{Ctx, Stream};
+use lens::render::Level as ViewLevel;
+use lens::resolve::{PassthroughReason, Plan};
+use lens::store::Store;
+use lens::tokens::{Heuristic, TokenEstimator};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let invocation = match cli::parse(args) {
+    let invocation = match lens::cli::parse(args) {
         Ok(invocation) => invocation,
         Err(err) => return fail(&err),
     };
@@ -74,7 +57,7 @@ struct Env {
 
 impl Env {
     fn from_process() -> Self {
-        let dirs = platform::Dirs::from_env();
+        let dirs = lens::platform::Dirs::from_env();
         let store_override = std::env::var_os("LENS_STORE");
         let logs_override = std::env::var_os("LENS_LOG_DIR");
         Env {
@@ -85,7 +68,7 @@ impl Env {
     }
 
     fn logger(&self) -> Logger {
-        let mut config = log::Config::new(&self.logs);
+        let mut config = lens::log::Config::new(&self.logs);
         config.level = self.log_level;
         Logger::init(&config)
     }
@@ -105,12 +88,13 @@ fn run(argv: &[String]) -> ExitCode {
     let env = Env::from_process();
     let mode_raw =
         std::env::var_os("LENS_MODE").is_some_and(|mode| mode.eq_ignore_ascii_case("raw"));
-    let stdin_is_tty = platform::is_tty(platform::STDIN_FD);
+    let stdin_is_tty = lens::platform::is_tty(lens::platform::STDIN_FD);
     let lens_exe = std::env::current_exe().ok();
     let path_var = std::env::var_os("PATH");
     let cwd = std::env::current_dir().unwrap_or_default();
 
-    let plan = resolve::plan(argv, mode_raw, stdin_is_tty, lens_exe.as_deref(), path_var.as_ref());
+    let plan =
+        lens::resolve::plan(argv, mode_raw, stdin_is_tty, lens_exe.as_deref(), path_var.as_ref());
 
     match plan {
         Plan::Passthrough { reason } => {
@@ -119,7 +103,7 @@ fn run(argv: &[String]) -> ExitCode {
             env.logger().run(passthrough_record(argv, &cwd, reason));
             passthrough(argv)
         }
-        Plan::Capture { program } => match executor::capture(&program, argv) {
+        Plan::Capture { program } => match lens::executor::capture(&program, argv) {
             Ok(captured) => {
                 let duration_ms = captured.duration.as_millis() as u64;
                 // Store first, emit second: the handle belongs in the output,
@@ -148,9 +132,9 @@ fn run(argv: &[String]) -> ExitCode {
                 // Filter before logging, so the record can say what the caller
                 // actually received rather than what was captured.
                 let level = ViewLevel::from_number(
-                    level_from_env().unwrap_or(render::DEFAULT_LEVEL.number()),
+                    level_from_env().unwrap_or(lens::render::DEFAULT_LEVEL.number()),
                 )
-                .unwrap_or(render::DEFAULT_LEVEL);
+                .unwrap_or(lens::render::DEFAULT_LEVEL);
                 let view = filter(
                     &captured.stdout,
                     &captured.stderr,
@@ -258,15 +242,15 @@ fn show(args: &[String]) -> ExitCode {
     let Some(text) = handle_text else {
         return fail(&"lens show needs a handle, e.g. lens show a3f19c2b");
     };
-    let Some(handle) = store::Handle::parse(text) else {
+    let Some(handle) = lens::store::Handle::parse(text) else {
         return fail(&format!("`{text}` is not a handle — expected 8 hex digits"));
     };
 
     let store = Store::new(&env.store);
-    let Ok(stdout) = store.read_stream(&handle, store::Stream::Stdout) else {
+    let Ok(stdout) = store.read_stream(&handle, lens::store::Stream::Stdout) else {
         return fail(&format!("no run `{handle}` in {}", env.store.display()));
     };
-    let stderr = store.read_stream(&handle, store::Stream::Stderr).unwrap_or_default();
+    let stderr = store.read_stream(&handle, lens::store::Stream::Stderr).unwrap_or_default();
     let meta = store.read_meta(&handle).ok();
     let exit_code = meta.as_ref().map(|m| m.exit_code).unwrap_or(0);
 
@@ -312,7 +296,7 @@ fn filter(
     handle: Option<&str>,
 ) -> View {
     let ctx = Ctx { exit_code, ..Ctx::default() };
-    let stages = pipeline::default_stages();
+    let stages = lens::pipeline::default_stages();
 
     let out = filter_stream(stdout, Stream::Stdout, &stages, &ctx, level, handle);
     let err = filter_stream(stderr, Stream::Stderr, &stages, &ctx, level, handle);
@@ -352,7 +336,7 @@ struct StreamView {
 fn filter_stream(
     raw: &[u8],
     stream: Stream,
-    stages: &[&dyn pipeline::Stage],
+    stages: &[&dyn lens::pipeline::Stage],
     ctx: &Ctx,
     level: ViewLevel,
     handle: Option<&str>,
@@ -363,9 +347,9 @@ fn filter_stream(
         return StreamView { bytes: raw.to_vec(), in_lines: lines, out_lines: lines };
     }
 
-    let mut doc = adapters::parse(raw, stream);
-    pipeline::run(&mut doc, stages, ctx);
-    let rendered = render::render(&doc, level, handle);
+    let mut doc = lens::adapters::parse(raw, stream);
+    lens::pipeline::run(&mut doc, stages, ctx);
+    let rendered = lens::render::render(&doc, level, handle);
 
     StreamView {
         bytes: rendered.into_bytes(),
@@ -389,7 +373,7 @@ fn stats(args: &[String]) -> ExitCode {
     while let Some(flag) = rest.next() {
         match flag.as_str() {
             "--since" => match rest.next() {
-                Some(spec) => match log::since_cutoff(spec, std::time::SystemTime::now()) {
+                Some(spec) => match lens::log::since_cutoff(spec, std::time::SystemTime::now()) {
                     Some(cutoff) => since = Some(cutoff),
                     None => {
                         return fail(&format!("unrecognized duration `{spec}` — try 7d, 24h, 30m"));
@@ -405,8 +389,8 @@ fn stats(args: &[String]) -> ExitCode {
         }
     }
 
-    let records = log::read_all(&env.logs, log::DEFAULT_MAX_FILES);
-    let stats = log::aggregate(&records, since.as_deref(), cmd.as_deref());
+    let records = lens::log::read_all(&env.logs, lens::log::DEFAULT_MAX_FILES);
+    let stats = lens::log::aggregate(&records, since.as_deref(), cmd.as_deref());
 
     if stats.runs == 0 {
         println!("no runs recorded in {}", env.logs.display());
@@ -468,8 +452,8 @@ fn logs(args: &[String]) -> ExitCode {
         }
     }
 
-    let records = log::read_all(&env.logs, log::DEFAULT_MAX_FILES);
-    let matching: Vec<&log::Record> =
+    let records = lens::log::read_all(&env.logs, lens::log::DEFAULT_MAX_FILES);
+    let matching: Vec<&lens::log::Record> =
         records.iter().filter(|r| level.is_none_or(|want| r.lvl <= want)).collect();
 
     for record in matching.iter().rev().take(tail).rev() {
@@ -491,7 +475,7 @@ fn passthrough(argv: &[String]) -> ExitCode {
 
     #[cfg(unix)]
     {
-        let err = platform::exec(&mut cmd);
+        let err = lens::platform::exec(&mut cmd);
         // exec only returns on failure. A command that could not be started is
         // the shell's classic 127.
         eprintln!("lens: {}: {err}", argv[0]);
@@ -501,7 +485,7 @@ fn passthrough(argv: &[String]) -> ExitCode {
     #[cfg(not(unix))]
     {
         match cmd.status() {
-            Ok(status) => exit_with(platform::exit_code_for_status(&status)),
+            Ok(status) => exit_with(lens::platform::exit_code_for_status(&status)),
             Err(err) => {
                 eprintln!("lens: {}: {err}", argv[0]);
                 ExitCode::from(127)

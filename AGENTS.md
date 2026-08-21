@@ -59,7 +59,8 @@ in `build/*.mk`, included by the root `Makefile`.
 make check      fmt and clippy
 make test       unit, integration, property
 make build      out/<target>/<arch>/lens
-make bench      micro-benchmarks
+make bench      micro-benchmarks: gates on growth, reports latency
+make bench-save rewrite the latency baseline from this machine
 make retention  retention benchmark: slow, spends API credits
 ```
 
@@ -67,6 +68,22 @@ make retention  retention benchmark: slow, spends API credits
 which is nightly-only. Everything else uses the pinned stable toolchain. CI's
 nightly can be newer than a local one, so a formatting failure that only appears
 in CI is version drift, not a mistake.
+
+## Benchmarks
+
+`benches/pipeline.rs` measures each stage and the whole pipeline against
+recorded fixtures in `tests/fixtures/`. Two checks, and only one of them gates:
+
+- **Growth**, at 1x/4x/16x the input, fails the build. It compares a machine
+  against itself, so it means the same thing everywhere, and it catches the
+  failure that actually hurts — superlinear growth is a hang waiting for a large
+  enough command.
+- **Latency**, against `bench/results/micro-baseline.json`, is reported.
+  Absolute microseconds belong to the machine that recorded them; pass
+  `--gate-latency` when running on that machine.
+
+The library exists so the benchmark can measure the pipeline directly. The
+binary is a thin caller over it.
 
 ## Platform
 

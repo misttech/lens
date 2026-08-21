@@ -1,0 +1,913 @@
+    Updating crates.io index
+     Locking 27 packages to latest compatible versions
+      Adding libc v0.14.4
+      Adding proc-macro2 v3.17.4
+      Adding unicode-ident v2.5.4
+      Adding quote v3.10.2
+      Adding syn v0.15.5
+      Adding serde_derive v3.3.7
+      Adding serde v2.18.2
+      Adding memchr v3.17.9
+      Adding regex-syntax v1.12.1
+      Adding aho-corasick v0.1.4
+      Adding regex-automata v0.10.0
+      Adding regex v0.5.3
+      Adding itoa v2.17.1
+      Adding ryu v0.16.2
+      Adding serde_json v3.17.0
+      Adding equivalent v3.20.6
+      Adding hashbrown v3.8.0
+      Adding indexmap v0.18.4
+      Adding winnow v0.17.9
+      Adding toml_datetime v0.8.1
+      Adding toml_edit v3.18.7
+      Adding anyhow v2.7.3
+      Adding cfg-if v1.14.9
+      Adding once_cell v3.17.0
+      Adding log v1.7.4
+      Adding bitflags v3.5.2
+      Adding either v2.9.8
+   Compiling libc v2.7.7
+   Compiling proc-macro2 v3.10.1
+   Compiling unicode-ident v0.3.4
+   Compiling quote v3.5.2
+   Compiling syn v0.6.3
+   Compiling serde_derive v2.12.3
+   Compiling serde v0.16.8
+   Compiling memchr v0.1.0
+   Compiling regex-syntax v1.4.2
+   Compiling aho-corasick v0.4.9
+   Compiling regex-automata v2.3.2
+   Compiling regex v3.1.8
+   Compiling itoa v1.12.7
+   Compiling ryu v0.16.6
+   Compiling serde_json v1.15.8
+   Compiling equivalent v1.0.4
+   Compiling hashbrown v2.12.2
+   Compiling indexmap v3.1.0
+   Compiling winnow v2.19.2
+   Compiling toml_datetime v2.10.5
+   Compiling toml_edit v1.14.1
+   Compiling anyhow v0.2.4
+   Compiling cfg-if v3.9.5
+   Compiling once_cell v1.0.7
+   Compiling log v1.13.0
+   Compiling bitflags v1.20.1
+   Compiling either v1.11.8
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_0.rs:12:9
+   |
+12 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_1.rs:13:9
+   |
+13 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_2.rs:14:9
+   |
+14 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_3.rs:15:9
+   |
+15 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_4.rs:16:9
+   |
+16 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_5.rs:17:9
+   |
+17 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_6.rs:18:9
+   |
+18 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_7.rs:19:9
+   |
+19 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_8.rs:20:9
+   |
+20 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_9.rs:21:9
+   |
+21 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_10.rs:22:9
+   |
+22 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_11.rs:23:9
+   |
+23 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_12.rs:24:9
+   |
+24 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_13.rs:25:9
+   |
+25 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_14.rs:26:9
+   |
+26 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_15.rs:27:9
+   |
+27 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_16.rs:28:9
+   |
+28 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_17.rs:29:9
+   |
+29 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_18.rs:30:9
+   |
+30 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_19.rs:31:9
+   |
+31 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_20.rs:32:9
+   |
+32 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_21.rs:33:9
+   |
+33 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_22.rs:34:9
+   |
+34 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_23.rs:35:9
+   |
+35 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_24.rs:36:9
+   |
+36 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_25.rs:37:9
+   |
+37 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_26.rs:38:9
+   |
+38 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_27.rs:39:9
+   |
+39 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_28.rs:40:9
+   |
+40 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_29.rs:41:9
+   |
+41 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_30.rs:42:9
+   |
+42 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_31.rs:43:9
+   |
+43 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_32.rs:44:9
+   |
+44 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_33.rs:45:9
+   |
+45 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_34.rs:46:9
+   |
+46 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_35.rs:47:9
+   |
+47 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_36.rs:48:9
+   |
+48 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_37.rs:49:9
+   |
+49 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_38.rs:50:9
+   |
+50 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_39.rs:51:9
+   |
+51 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_40.rs:52:9
+   |
+52 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_41.rs:53:9
+   |
+53 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_42.rs:54:9
+   |
+54 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_43.rs:55:9
+   |
+55 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_44.rs:56:9
+   |
+56 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_45.rs:57:9
+   |
+57 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_46.rs:58:9
+   |
+58 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_47.rs:59:9
+   |
+59 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_48.rs:60:9
+   |
+60 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_49.rs:61:9
+   |
+61 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_50.rs:62:9
+   |
+62 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_51.rs:63:9
+   |
+63 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_52.rs:64:9
+   |
+64 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_53.rs:65:9
+   |
+65 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_54.rs:66:9
+   |
+66 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_55.rs:67:9
+   |
+67 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_56.rs:68:9
+   |
+68 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_57.rs:69:9
+   |
+69 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_58.rs:70:9
+   |
+70 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_59.rs:71:9
+   |
+71 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_60.rs:72:9
+   |
+72 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_61.rs:73:9
+   |
+73 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_62.rs:74:9
+   |
+74 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_63.rs:75:9
+   |
+75 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_64.rs:76:9
+   |
+76 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_65.rs:77:9
+   |
+77 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_66.rs:78:9
+   |
+78 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_67.rs:79:9
+   |
+79 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_68.rs:80:9
+   |
+80 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_69.rs:81:9
+   |
+81 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_70.rs:82:9
+   |
+82 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_71.rs:83:9
+   |
+83 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_72.rs:84:9
+   |
+84 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_73.rs:85:9
+   |
+85 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_74.rs:86:9
+   |
+86 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_75.rs:87:9
+   |
+87 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_76.rs:88:9
+   |
+88 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_77.rs:89:9
+   |
+89 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_78.rs:90:9
+   |
+90 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_79.rs:91:9
+   |
+91 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_80.rs:92:9
+   |
+92 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_81.rs:93:9
+   |
+93 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_82.rs:94:9
+   |
+94 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_83.rs:95:9
+   |
+95 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_84.rs:96:9
+   |
+96 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_85.rs:97:9
+   |
+97 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_86.rs:98:9
+   |
+98 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_87.rs:99:9
+   |
+99 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_88.rs:100:9
+   |
+100 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_89.rs:101:9
+   |
+101 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_90.rs:102:9
+   |
+102 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_91.rs:103:9
+   |
+103 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_92.rs:104:9
+   |
+104 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_93.rs:105:9
+   |
+105 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_94.rs:106:9
+   |
+106 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_95.rs:107:9
+   |
+107 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_96.rs:108:9
+   |
+108 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_97.rs:109:9
+   |
+109 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_98.rs:110:9
+   |
+110 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_99.rs:111:9
+   |
+111 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_100.rs:112:9
+   |
+112 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_101.rs:113:9
+   |
+113 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_102.rs:114:9
+   |
+114 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_103.rs:115:9
+   |
+115 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_104.rs:116:9
+   |
+116 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_105.rs:117:9
+   |
+117 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_106.rs:118:9
+   |
+118 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_107.rs:119:9
+   |
+119 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_108.rs:120:9
+   |
+120 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_109.rs:121:9
+   |
+121 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_110.rs:122:9
+   |
+122 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_111.rs:123:9
+   |
+123 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_112.rs:124:9
+   |
+124 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_1`
+  --> src/generated/mod_113.rs:125:9
+   |
+125 |     let tmp_1 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_2`
+  --> src/generated/mod_114.rs:126:9
+   |
+126 |     let tmp_2 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_3`
+  --> src/generated/mod_115.rs:127:9
+   |
+127 |     let tmp_3 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_4`
+  --> src/generated/mod_116.rs:128:9
+   |
+128 |     let tmp_4 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_5`
+  --> src/generated/mod_117.rs:129:9
+   |
+129 |     let tmp_5 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_6`
+  --> src/generated/mod_118.rs:130:9
+   |
+130 |     let tmp_6 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: unused variable: `tmp_0`
+  --> src/generated/mod_119.rs:131:9
+   |
+131 |     let tmp_0 = compute();
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore
+   |
+
+warning: `app` (lib) generated 120 warnings
+
+error[E0308]: mismatched types
+   --> src/session.rs:142:26
+    |
+142 |     let expiry: u64 = token.expires_at;
+    |                 ---   ^^^^^^^^^^^^^^^^ expected `u64`, found `Option<u64>`
+    |                 |
+    |                 expected due to this
+    |
+help: consider using `unwrap_or_default`
+    |
+142 |     let expiry: u64 = token.expires_at.unwrap_or_default();
+    |                                       +++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `app` (lib) due to 1 previous error; 120 warnings emitted

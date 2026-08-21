@@ -1,0 +1,3376 @@
+commit 2e94eefa31f0bd65a8dff6ddc114f995354af46b
+Author: Bruno Herrera <bruno.herrera@mist-os.com>
+Date:   Fri Aug 21 10:11:50 2026 -0300
+
+    [pipeline] Show the view worth reading, and announce the rest
+    
+    Output now reaches the caller filtered. Stages mark blocks, the renderer
+    is the only thing that removes them, and because it removes them it
+    knows what went and says so in a marker carrying the handle.
+    
+    Five stages. ansi strips escapes and applies carriage-return overwrites,
+    first, because every later stage matches on text. progress drops build
+    churn. dedupe collapses repeated lines and repeated multi-block
+    patterns, keeping the count — the information in four hundred copies is
+    the number four hundred. classify assigns severity and enforces the
+    floor: a non-zero exit with nothing recognized as a failure force-keeps
+    the tail, because a filtered view of a failed command that reads as
+    success is the worst output this tool can produce. context force-keeps
+    the blocks around a failure, since an error without what it was
+    attempting is not actionable.
+    
+    Classification is positional, not merely word-bounded. A failure word
+    counts where a diagnostic would put it — starting a line, opening a
+    detail with `:` or `[`, counted after a number, or ending a Python
+    exception type. Matching the word anywhere read a commit message as
+    fourteen failures and reported them for a command that exited 0, and
+    that miscount is not cosmetic: it decides what survives budget pressure
+    and what a level-1 view may drop.
+    
+    `lens show --level N` re-derives any view from stored bytes. Level 3
+    skips the pipeline entirely and emits what the command wrote, which is
+    what makes the store's promise checkable.
+    
+    Two things the invariants forced. A stream that is not valid UTF-8 is
+    passed through unfiltered rather than mangled into replacement
+    characters — filtering it would mean guessing what its bytes mean. And a
+    stream the command never wrote to renders empty at every level, rather
+    than reporting "0 lines" that the caller then has to filter.
+    
+    Parsing carries a has-continuation flag instead of rediscovering it per
+    line. Scanning the block to answer that made parsing quadratic in block
+    length: 40k unindented lines took 451ms, now 2ms. A test asserts the
+    growth ratio so it cannot come back quietly.
+    
+    The run record reports what the caller received — lines and estimated
+    tokens in and out, the level, the stages — so `lens stats` can report
+    reduction, labelled as output tokens rather than as cost.
+    
+    Test: make check test — 168 unit, 54 integration, clippy clean
+    Test: a 34-line build failure rendered as 4 lines, error and location
+          intact, exit code 1 preserved, marker resolving to the full run
+    Test: lens git show over this repository — 3241 lines captured, output
+          byte-identical to git's because nothing matched, and level 0
+          reporting 3 failing rather than 14
+    
+    Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_018xFwxbMXYeRuoCdvxHMdug
+
+diff --git a/AGENTS.md b/AGENTS.md
+index fb478a8..5901296 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -132,6 +132,23 @@ is no outcome to report. A placeholder would put fabricated exit codes into
+ without argv, so a secret passed in an argument does reach the log. Output never
+ does below `trace`, where it is capped at a short prefix.
+ 
++**A stream that is not valid UTF-8 is passed through unfiltered.** Filtering it
++would mean deciding what a byte sequence means, and Lens does not know — a
++tarball or a binary diff is content whose every byte matters. Mangling it into
++replacement characters to save tokens would break the command for the sake of
++reading it.
++
++**Levels 1 and 2 are subsets; level 0 is a different shape.** Asking for less
++detail gives you less output at 1 and 2. Level 0 reports counts instead of
++content, so on output with nothing worth showing it can be longer than level 1 —
++it is bounded by the raw view, not by the level above it.
++
++**Parsing carries a flag rather than rediscovering it.** Whether a block has an
++indented continuation is tracked as the block is built. Asking by scanning the
++block made parsing quadratic in block length, and a command that prints ten
++thousand unindented lines is one block: 40k lines took 451ms before the fix and
++2ms after.
++
+ **A lens flag after the command name reaches the child.** `lens mytool --budget
+ 3` is a valid command line for `mytool`, and Lens does not reinterpret a command
+ it was asked to run. An unknown flag *before* the command is an error rather
+diff --git a/src/adapters/generic.rs b/src/adapters/generic.rs
+new file mode 100644
+index 0000000..c7794a6
+--- /dev/null
++++ b/src/adapters/generic.rs
+@@ -0,0 +1,185 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! The fallback adapter: line-based blocking that works on anything.
++//!
++//! Two separators, both of which mean "a new thought starts here" in almost
++//! every command's output:
++//!
++//! * a blank line;
++//! * a return to the left margin after indented lines, which is how compilers,
++//!   test runners and tracebacks all mark the end of a stanza.
++//!
++//! Getting this wrong is cheap in one direction and expensive in the other. Too
++//! many blocks costs a little precision in what gets dropped together; too few
++//! means an error and a hundred lines of noise share a fate.
++
++use crate::pipeline::{Block, Doc, Line, Stream};
++
++/// Parse text into blocks.
++pub fn parse(text: &str, stream: Stream) -> Doc {
++    let mut doc = Doc::empty(stream);
++    let mut current: Vec<Line> = Vec::new();
++    // Whether the block being gathered has an indented continuation in it.
++    // Carried rather than rediscovered: asking the question by scanning the
++    // block makes parsing quadratic in the length of a block, and a command
++    // that prints ten thousand unindented lines is one block.
++    let mut has_continuation = false;
++
++    for (index, raw) in text.lines().enumerate() {
++        let line = Line { text: raw.to_string(), origin: index + 1 };
++
++        if raw.trim().is_empty() {
++            // A blank line ends the block and is not content of its own.
++            flush(&mut doc, &mut current);
++            has_continuation = false;
++            continue;
++        }
++
++        let indented = is_indented(raw);
++
++        // A line at the left margin after an indented run starts a new stanza.
++        if has_continuation && !indented && !is_gutter(raw) {
++            flush(&mut doc, &mut current);
++            has_continuation = false;
++        }
++
++        // The first line of a block is its header; an indented line after it is
++        // the continuation that makes the next return to the margin a boundary.
++        if indented && !current.is_empty() {
++            has_continuation = true;
++        }
++        current.push(line);
++    }
++
++    flush(&mut doc, &mut current);
++    doc
++}
++
++fn is_indented(text: &str) -> bool {
++    text.starts_with(' ') || text.starts_with('\t')
++}
++
++/// Is this an unindented continuation rather than a new stanza?
++///
++/// Compilers print source excerpts in a numbered gutter — `4  |     let x = 1;`
++/// — which starts at the left margin without starting anything. Treating those
++/// as new blocks would split a diagnostic away from the code it is about, which
++/// is precisely the context a reader needs.
++fn is_gutter(text: &str) -> bool {
++    let rest = text.trim_start_matches(|c: char| c.is_ascii_digit());
++    let rest = rest.trim_start();
++    rest.starts_with('|')
++        || rest.starts_with('=')
++        || rest.starts_with('^')
++        || rest.starts_with("...")
++}
++
++/// Move the gathered lines into the document as one block.
++fn flush(doc: &mut Doc, current: &mut Vec<Line>) {
++    if !current.is_empty() {
++        doc.blocks.push(Block::new(std::mem::take(current)));
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn blocks(text: &str) -> Vec<String> {
++        parse(text, Stream::Stdout).blocks.iter().map(|b| b.text()).collect()
++    }
++
++    #[test]
++    fn blank_lines_separate_blocks() {
++        assert_eq!(blocks("one\n\ntwo\n\nthree"), vec!["one", "two", "three"]);
++    }
++
++    #[test]
++    fn consecutive_blank_lines_do_not_make_empty_blocks() {
++        assert_eq!(blocks("one\n\n\n\ntwo"), vec!["one", "two"]);
++    }
++
++    #[test]
++    fn an_indented_stanza_stays_with_its_header() {
++        // The shape every compiler diagnostic has. Splitting the message from
++        // its location would let one be dropped without the other.
++        let text = "error[E0308]: mismatched types\n  --> src/main.rs:4:9\n   |\n4  |     let x: u8 = \"s\";\n";
++        assert_eq!(blocks(text).len(), 1);
++        assert!(blocks(text)[0].contains("E0308"));
++    }
++
++    #[test]
++    fn a_numbered_gutter_line_is_not_a_new_block() {
++        // The shape rustc, gcc and clang all print. Splitting here would put the
++        // diagnostic in one block and the source it points at in another.
++        let text = "error[E0308]: mismatched types\n  --> src/main.rs:4:9\n   |\n4  |     let x: u8 = \"s\";\n   |                 ^^^ expected `u8`\n";
++        let parsed = blocks(text);
++        assert_eq!(parsed.len(), 1, "{parsed:?}");
++    }
++
++    #[test]
++    fn a_return_to_the_margin_starts_a_new_block() {
++        let text = "error: first\n  detail\nerror: second\n  detail";
++        let parsed = blocks(text);
++        assert_eq!(parsed.len(), 2, "{parsed:?}");
++        assert!(parsed[0].starts_with("error: first"));
++        assert!(parsed[1].starts_with("error: second"));
++    }
++
++    #[test]
++    fn a_flat_list_is_one_block() {
++        // No indentation anywhere, so there is no stanza structure to find.
++        assert_eq!(blocks("a.rs\nb.rs\nc.rs").len(), 1);
++    }
++
++    #[test]
++    fn line_numbers_are_one_based_and_count_blank_lines() {
++        // The property that keeps `file:line` references resolvable: origin is
++        // the line's position in the raw stream, not in the filtered view.
++        let doc = parse("one\n\nthree\n", Stream::Stdout);
++        assert_eq!(doc.blocks[0].lines[0].origin, 1);
++        assert_eq!(doc.blocks[1].lines[0].origin, 3);
++    }
++
++    #[test]
++    fn origins_are_strictly_increasing() {
++        let doc = parse("a\n  b\nc\n\nd\n  e\n", Stream::Stdout);
++        let origins: Vec<usize> =
++            doc.blocks.iter().flat_map(|b| &b.lines).map(|l| l.origin).collect();
++        assert!(origins.windows(2).all(|w| w[0] < w[1]), "{origins:?}");
++    }
++
++    #[test]
++    fn empty_input_is_an_empty_document() {
++        assert!(blocks("").is_empty());
++        assert!(blocks("\n\n\n").is_empty());
++    }
++
++    #[test]
++    fn a_missing_final_newline_does_not_lose_the_last_line() {
++        assert_eq!(blocks("one\ntwo"), vec!["one\ntwo"]);
++    }
++
++    #[test]
++    fn every_line_survives_parsing() {
++        // Blocking is not filtering. Blank lines are separators rather than
++        // content, so they are the only thing parsing removes.
++        let text = "a\n  b\nc\n\nd\n";
++        let doc = parse(text, Stream::Stdout);
++        let parsed: usize = doc.blocks.iter().map(|b| b.lines.len()).sum();
++        let non_blank = text.lines().filter(|l| !l.trim().is_empty()).count();
++        assert_eq!(parsed, non_blank);
++    }
++
++    #[test]
++    fn tabs_count_as_indentation() {
++        let text = "header\n\tdetail\nnext";
++        assert_eq!(blocks(text).len(), 2);
++    }
++
++    #[test]
++    fn the_stream_is_recorded() {
++        assert_eq!(parse("x", Stream::Stderr).source, Stream::Stderr);
++    }
++}
+diff --git a/src/adapters/mod.rs b/src/adapters/mod.rs
+new file mode 100644
+index 0000000..830656b
+--- /dev/null
++++ b/src/adapters/mod.rs
+@@ -0,0 +1,22 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Turning raw bytes into a document.
++//!
++//! An adapter is opt-in refinement. A command nobody wrote an adapter for still
++//! gets the full pipeline through [`generic`], which is why there is no such
++//! thing as output Lens cannot filter — only output it cannot filter *well*.
++
++pub mod generic;
++
++use crate::pipeline::{Doc, Stream};
++
++/// Parse raw stream bytes into a document.
++///
++/// Bytes, not text: command output is not guaranteed to be UTF-8, and the raw
++/// view has to be byte-identical to what the command produced. Invalid
++/// sequences are replaced for the purpose of *filtering* only — the store still
++/// holds the original, and that is what the raw view reads.
++pub fn parse(raw: &[u8], stream: Stream) -> Doc {
++    generic::parse(&String::from_utf8_lossy(raw), stream)
++}
+diff --git a/src/log.rs b/src/log.rs
+index 05d0947..42ef8ce 100644
+--- a/src/log.rs
++++ b/src/log.rs
+@@ -131,6 +131,26 @@ pub struct RunRecord {
+     /// Bytes the child wrote to stderr. Absent for passthrough.
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub err_bytes: Option<u64>,
++    /// Lines the command produced, before filtering.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub in_lines: Option<u64>,
++    /// Lines that reached the caller.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub out_lines: Option<u64>,
++    /// Estimated tokens the command produced.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub in_tok: Option<u64>,
++    /// Estimated tokens that reached the caller. The only reduction figure this
++    /// tool reports, and it is labelled as output tokens rather than as cost:
++    /// prompt caching and extra turns both break that inference.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub out_tok: Option<u64>,
++    /// Which view the caller got.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub level: Option<u8>,
++    /// Stages that ran, in order.
++    #[serde(skip_serializing_if = "Vec::is_empty", default)]
++    pub stages: Vec<String>,
+     /// Whether the output was emitted unfiltered.
+     pub passthrough: bool,
+     /// Why, when it was.
+@@ -164,8 +184,9 @@ pub struct Record {
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(tag = "type", rename_all = "lowercase")]
+ pub enum Body {
+-    /// One invocation.
+-    Run(RunRecord),
++    /// One invocation. Boxed because a run record is several times the size of
++    /// an event, and every event would otherwise carry that footprint.
++    Run(Box<RunRecord>),
+     /// One diagnostic.
+     Event(EventRecord),
+ }
+@@ -237,7 +258,7 @@ impl Logger {
+ 
+     /// Record one invocation.
+     pub fn run(&self, record: RunRecord) {
+-        self.write(Level::Info, Body::Run(record));
++        self.write(Level::Info, Body::Run(Box::new(record)));
+     }
+ 
+     /// Record one diagnostic.
+@@ -335,6 +356,10 @@ pub struct Stats {
+     pub passthrough: u64,
+     /// Total bytes the children produced.
+     pub bytes: u64,
++    /// Estimated tokens the commands produced.
++    pub in_tok: u64,
++    /// Estimated tokens that reached the caller.
++    pub out_tok: u64,
+     /// Per-command totals, sorted by count when rendered.
+     pub by_command: std::collections::BTreeMap<String, u64>,
+     /// Passthrough reasons and their counts.
+@@ -359,6 +384,8 @@ pub fn aggregate(records: &[Record], since: Option<&str>, cmd: Option<&str>) ->
+ 
+         stats.runs += 1;
+         stats.bytes += run.out_bytes.unwrap_or(0) + run.err_bytes.unwrap_or(0);
++        stats.in_tok += run.in_tok.unwrap_or(0);
++        stats.out_tok += run.out_tok.unwrap_or(0);
+         *stats.by_command.entry(run.cmd.clone()).or_default() += 1;
+         if run.passthrough {
+             stats.passthrough += 1;
+@@ -421,6 +448,12 @@ mod tests {
+             dur_ms: (!passthrough).then_some(8),
+             out_bytes: (!passthrough).then_some(100),
+             err_bytes: (!passthrough).then_some(20),
++            in_lines: (!passthrough).then_some(12),
++            out_lines: (!passthrough).then_some(4),
++            in_tok: (!passthrough).then_some(300),
++            out_tok: (!passthrough).then_some(90),
++            level: (!passthrough).then_some(2),
++            stages: if passthrough { vec![] } else { vec!["ansi".into()] },
+             passthrough,
+             reason: passthrough.then(|| "mode_raw".to_string()),
+         }
+@@ -456,7 +489,7 @@ mod tests {
+         let records = read_all(&dir.0, DEFAULT_MAX_FILES);
+         assert_eq!(records.len(), 1);
+         match &records[0].body {
+-            Body::Run(run) => assert_eq!(run, &a_run("git", false)),
++            Body::Run(run) => assert_eq!(**run, a_run("git", false)),
+             other => panic!("expected a run record, got {other:?}"),
+         }
+         assert!(records[0].t.ends_with('Z'));
+@@ -645,9 +678,21 @@ mod tests {
+     fn aggregation_counts_runs_and_passthroughs() {
+         let now = rfc3339_utc(SystemTime::now());
+         let records = vec![
+-            Record { t: now.clone(), lvl: Level::Info, body: Body::Run(a_run("git", false)) },
+-            Record { t: now.clone(), lvl: Level::Info, body: Body::Run(a_run("git", true)) },
+-            Record { t: now.clone(), lvl: Level::Info, body: Body::Run(a_run("cargo", false)) },
++            Record {
++                t: now.clone(),
++                lvl: Level::Info,
++                body: Body::Run(Box::new(a_run("git", false))),
++            },
++            Record {
++                t: now.clone(),
++                lvl: Level::Info,
++                body: Body::Run(Box::new(a_run("git", true))),
++            },
++            Record {
++                t: now.clone(),
++                lvl: Level::Info,
++                body: Body::Run(Box::new(a_run("cargo", false))),
++            },
+             Record {
+                 t: now.clone(),
+                 lvl: Level::Warn,
+@@ -673,12 +718,12 @@ mod tests {
+         let old = Record {
+             t: "2020-01-01T00:00:00Z".into(),
+             lvl: Level::Info,
+-            body: Body::Run(a_run("git", false)),
++            body: Body::Run(Box::new(a_run("git", false))),
+         };
+         let new = Record {
+             t: "2026-08-21T00:00:00Z".into(),
+             lvl: Level::Info,
+-            body: Body::Run(a_run("git", false)),
++            body: Body::Run(Box::new(a_run("git", false))),
+         };
+         let stats = aggregate(&[old, new], Some("2026-01-01T00:00:00Z"), None);
+         assert_eq!(stats.runs, 1);
+diff --git a/src/main.rs b/src/main.rs
+index 56a992a..7197193 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -4,19 +4,22 @@
+ //! Lens runs a real command, keeps its full output, and shows an AI coding agent
+ //! the view of that output worth spending context on.
+ //!
+-//! Lens runs the command, writes every byte it produced to a content-addressed
+-//! store, and emits them. No filtering happens yet — what exists is the part
+-//! that has to be right before anything is allowed to remove content: the
+-//! child's exit code, its bytes, its terminal, a record of every invocation,
+-//! and a handle that can re-derive any view of the run later.
++//! The command runs, every byte it produced goes to a content-addressed store,
++//! and a filtered view of it reaches the caller. Anything left out of that view
++//! is announced with a marker carrying the handle, so a reader always knows the
++//! rest is a request away.
+ 
++mod adapters;
+ mod cli;
+ mod executor;
+ mod log;
++mod pipeline;
+ mod platform;
++mod render;
+ mod resolve;
+ mod static_assert;
+ mod store;
++mod tokens;
+ 
+ use std::io::Write;
+ use std::path::PathBuf;
+@@ -24,8 +27,11 @@ use std::process::{Command, ExitCode};
+ 
+ use crate::cli::{Invocation, Subcommand};
+ use crate::log::{Level, Logger, RunRecord};
++use crate::pipeline::{Ctx, Stream};
++use crate::render::Level as ViewLevel;
+ use crate::resolve::{PassthroughReason, Plan};
+ use crate::store::Store;
++use crate::tokens::{Heuristic, TokenEstimator};
+ 
+ fn main() -> ExitCode {
+     let args: Vec<String> = std::env::args().skip(1).collect();
+@@ -131,6 +137,7 @@ fn run(argv: &[String]) -> ExitCode {
+                     )
+                     .ok();
+ 
++                let handle_str = handle.as_ref().map(|h| h.to_string());
+                 let logger = env.logger();
+                 if handle.is_none() {
+                     // A store that could not be written has lost the ability to
+@@ -138,8 +145,22 @@ fn run(argv: &[String]) -> ExitCode {
+                     // more: the command still succeeds and its output lands.
+                     logger.event(Level::Warn, "store write failed", &[("cmd", command_name(argv))]);
+                 }
++                // Filter before logging, so the record can say what the caller
++                // actually received rather than what was captured.
++                let level = ViewLevel::from_number(
++                    level_from_env().unwrap_or(render::DEFAULT_LEVEL.number()),
++                )
++                .unwrap_or(render::DEFAULT_LEVEL);
++                let view = filter(
++                    &captured.stdout,
++                    &captured.stderr,
++                    captured.exit_code,
++                    level,
++                    handle_str.as_deref(),
++                );
++
+                 logger.run(RunRecord {
+-                    handle: handle.map(|h| h.to_string()),
++                    handle: handle_str,
+                     cmd: command_name(argv).to_string(),
+                     argv: argv.to_vec(),
+                     cwd: cwd.to_string_lossy().into_owned(),
+@@ -147,11 +168,17 @@ fn run(argv: &[String]) -> ExitCode {
+                     dur_ms: Some(duration_ms),
+                     out_bytes: Some(captured.stdout.len() as u64),
+                     err_bytes: Some(captured.stderr.len() as u64),
++                    in_lines: Some(view.in_lines as u64),
++                    out_lines: Some(view.out_lines as u64),
++                    in_tok: Some(view.in_tok as u64),
++                    out_tok: Some(view.out_tok as u64),
++                    level: Some(level.number()),
++                    stages: view.stages.clone(),
+                     passthrough: false,
+                     reason: None,
+                 });
+ 
+-                emit(&captured.stdout, &captured.stderr);
++                emit(&view.stdout, &view.stderr);
+                 exit_with(captured.exit_code)
+             }
+             // An internal failure is never allowed to become the user's
+@@ -186,6 +213,12 @@ fn passthrough_record(
+         dur_ms: None,
+         out_bytes: None,
+         err_bytes: None,
++        in_lines: None,
++        out_lines: None,
++        in_tok: None,
++        out_tok: None,
++        level: None,
++        stages: Vec::new(),
+         passthrough: true,
+         reason: Some(reason.as_str().to_string()),
+     }
+@@ -196,21 +229,35 @@ fn command_name(argv: &[String]) -> &str {
+     argv[0].rsplit('/').next().unwrap_or(&argv[0])
+ }
+ 
+-/// `lens show <handle>`.
++/// `lens show <handle> [--level N]`.
+ ///
+-/// Re-emits a stored run without re-executing the command — which is the whole
+-/// point of the store, and the half of it a user can observe today. `--level N`
+-/// arrives with the renderer; until then every view is the raw one, which is
+-/// level 3.
++/// Re-derives a view from stored bytes. The command is not re-executed, which is
++/// the whole point: a reader who wants more detail pays for the render, not for
++/// the run — and gets the same bytes however long ago it happened.
+ fn show(args: &[String]) -> ExitCode {
+     let env = Env::from_process();
+ 
+-    let Some(text) = args.first() else {
++    let mut handle_text: Option<&String> = None;
++    let mut level = ViewLevel::Raw;
++    let mut rest = args.iter();
++    while let Some(arg) = rest.next() {
++        match arg.as_str() {
++            "--level" => {
++                match rest.next().and_then(|n| n.parse().ok()).and_then(ViewLevel::from_number) {
++                    Some(parsed) => level = parsed,
++                    None => return fail(&"--level takes 0, 1, 2 or 3"),
++                }
++            }
++            other if other.starts_with('-') => {
++                return fail(&format!("unknown flag `{other}` for lens show"));
++            }
++            _ => handle_text = Some(arg),
++        }
++    }
++
++    let Some(text) = handle_text else {
+         return fail(&"lens show needs a handle, e.g. lens show a3f19c2b");
+     };
+-    if let Some(flag) = args.iter().find(|a| a.starts_with("--")) {
+-        return fail(&format!("`{flag}` is not implemented yet — it arrives with the renderer"));
+-    }
+     let Some(handle) = store::Handle::parse(text) else {
+         return fail(&format!("`{text}` is not a handle — expected 8 hex digits"));
+     };
+@@ -220,18 +267,118 @@ fn show(args: &[String]) -> ExitCode {
+         return fail(&format!("no run `{handle}` in {}", env.store.display()));
+     };
+     let stderr = store.read_stream(&handle, store::Stream::Stderr).unwrap_or_default();
++    let meta = store.read_meta(&handle).ok();
++    let exit_code = meta.as_ref().map(|m| m.exit_code).unwrap_or(0);
++
++    if level == ViewLevel::Raw {
++        // Byte-identical to what the command produced. No parse, no re-encode:
++        // this path is what makes the store's promise checkable.
++        emit(&stdout, &stderr);
++    } else {
++        let view = filter(&stdout, &stderr, exit_code, level, Some(handle.as_str()));
++        emit(&view.stdout, &view.stderr);
++    }
+ 
+-    emit(&stdout, &stderr);
++    // Reading a run is not running it, but reporting success for a run that
++    // failed would be a lie, so the stored code is what this exits with.
++    exit_with(exit_code)
++}
++
++/// A rendered view of both streams, and what it cost.
++struct View {
++    stdout: Vec<u8>,
++    stderr: Vec<u8>,
++    /// Lines the command produced.
++    in_lines: usize,
++    /// Lines that reached the caller.
++    out_lines: usize,
++    /// Estimated tokens in, and out.
++    in_tok: usize,
++    out_tok: usize,
++    /// Stages that ran, in order.
++    stages: Vec<String>,
++}
+ 
+-    // The stored run's exit code is reported by `lens show`'s own exit code, so
+-    // a script re-reading a run sees what the command did. Reading a run is not
+-    // running it, but reporting success for a failed run would be a lie.
+-    match store.read_meta(&handle) {
+-        Ok(meta) => exit_with(meta.exit_code),
+-        Err(_) => ExitCode::SUCCESS,
++/// Parse, filter and render both streams at `level`.
++///
++/// The two are filtered separately and never merged: which stream a line came
++/// from is a signal the pipeline uses, and the caller gets them back on the
++/// descriptors the command wrote them to.
++fn filter(
++    stdout: &[u8],
++    stderr: &[u8],
++    exit_code: i32,
++    level: ViewLevel,
++    handle: Option<&str>,
++) -> View {
++    let ctx = Ctx { exit_code, ..Ctx::default() };
++    let stages = pipeline::default_stages();
++
++    let out = filter_stream(stdout, Stream::Stdout, &stages, &ctx, level, handle);
++    let err = filter_stream(stderr, Stream::Stderr, &stages, &ctx, level, handle);
++
++    let estimator = Heuristic;
++    View {
++        // Measured on the rendered view rather than on the kept blocks: the
++        // marker lines are part of what the caller pays for, and a reduction
++        // figure that omits them would flatter the tool.
++        in_tok: estimator.estimate(&String::from_utf8_lossy(stdout))
++            + estimator.estimate(&String::from_utf8_lossy(stderr)),
++        out_tok: estimator.estimate(&String::from_utf8_lossy(&out.bytes))
++            + estimator.estimate(&String::from_utf8_lossy(&err.bytes)),
++        in_lines: out.in_lines + err.in_lines,
++        out_lines: out.out_lines + err.out_lines,
++        stages: stages.iter().map(|stage| stage.name().to_string()).collect(),
++        stdout: out.bytes,
++        stderr: err.bytes,
+     }
+ }
+ 
++/// One filtered stream.
++struct StreamView {
++    bytes: Vec<u8>,
++    in_lines: usize,
++    out_lines: usize,
++}
++
++/// Filter one stream, or pass it through when it is not text.
++///
++/// Output that is not valid UTF-8 is emitted unchanged. Filtering it would mean
++/// deciding what a byte sequence means, and the honest answer is that Lens does
++/// not know — a tarball, a binary diff or a compressed stream is content whose
++/// every byte matters. Mangling it into replacement characters to save tokens
++/// would break the command for the sake of reading it, so this is one more case
++/// where doubt resolves to passthrough.
++fn filter_stream(
++    raw: &[u8],
++    stream: Stream,
++    stages: &[&dyn pipeline::Stage],
++    ctx: &Ctx,
++    level: ViewLevel,
++    handle: Option<&str>,
++) -> StreamView {
++    let lines = raw.iter().filter(|b| **b == b'\n').count();
++
++    if std::str::from_utf8(raw).is_err() {
++        return StreamView { bytes: raw.to_vec(), in_lines: lines, out_lines: lines };
++    }
++
++    let mut doc = adapters::parse(raw, stream);
++    pipeline::run(&mut doc, stages, ctx);
++    let rendered = render::render(&doc, level, handle);
++
++    StreamView {
++        bytes: rendered.into_bytes(),
++        in_lines: doc.line_count(),
++        out_lines: doc.kept_line_count(),
++    }
++}
++
++/// `LENS_LEVEL`, when set to a level this build understands.
++fn level_from_env() -> Option<u8> {
++    std::env::var_os("LENS_LEVEL")?.to_string_lossy().parse().ok()
++}
++
+ /// `lens stats [--since 7d] [--cmd git]`.
+ fn stats(args: &[String]) -> ExitCode {
+     let env = Env::from_process();
+@@ -270,6 +417,14 @@ fn stats(args: &[String]) -> ExitCode {
+     println!("runs              {:>10}", stats.runs);
+     println!("passthrough       {:>10}  ({:.0}%)", stats.passthrough, pct(stats.passthrough));
+     println!("captured bytes    {:>10}", stats.bytes);
++    if stats.in_tok > 0 {
++        let reduction = 100.0 - (stats.out_tok as f64 / stats.in_tok as f64) * 100.0;
++        println!("input tokens      {:>10}", stats.in_tok);
++        println!("output tokens     {:>10}", stats.out_tok);
++        // Output tokens only, and labelled as such. Prompt caching and extra
++        // turns both break the inference from this number to a bill.
++        println!("reduction         {reduction:>9.1}%  (output tokens only)");
++    }
+ 
+     if !stats.by_command.is_empty() {
+         println!("\nby command");
+@@ -396,7 +551,7 @@ usage:
+   lens <command> [args...]      run a command and filter its output
+   lens --version
+   lens --help
+-  lens show <handle>            re-emit a stored run without re-running it
++  lens show <handle> [--level N]  re-derive a view without re-running it
+   lens stats [--since 7d] [--cmd git]
+   lens logs [--tail N] [--level warn]
+ 
+@@ -405,6 +560,7 @@ child, including tokens that look like lens flags.
+ 
+ environment:
+   LENS_MODE=raw                 emit raw output, exit with the child's code
++  LENS_LEVEL=0..3               how much detail to show (default 2; 3 is raw)
+   LENS_LOG=<level>              off error warn info debug trace (default info)
+   LENS_STORE=<dir>              where runs are kept
+   LENS_LOG_DIR=<dir>            where logs are kept
+diff --git a/src/pipeline/ansi.rs b/src/pipeline/ansi.rs
+new file mode 100644
+index 0000000..5527b39
+--- /dev/null
++++ b/src/pipeline/ansi.rs
+@@ -0,0 +1,202 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Strip terminal control sequences and resolve carriage-return overwrites.
++//!
++//! Runs first, because every later stage matches on text. A line that still
++//! carries `\x1b[31m` does not match `^error`, and a progress bar that redraws
++//! itself with `\r` looks like a thousand distinct lines until the overwrites
++//! are applied.
++//!
++//! This stage rewrites text, which is allowed: removing an escape sequence
++//! changes how a line renders, never which line it is.
++
++use super::{Ctx, Doc, Stage};
++
++/// The ANSI stage.
++#[derive(Debug, Clone, Copy)]
++pub struct Ansi;
++
++impl Stage for Ansi {
++    fn name(&self) -> &'static str {
++        "ansi"
++    }
++
++    fn apply(&self, doc: &mut Doc, _ctx: &Ctx) {
++        for block in &mut doc.blocks {
++            for line in &mut block.lines {
++                if line.text.contains('\x1b') || line.text.contains('\r') {
++                    line.text = clean(&line.text);
++                }
++            }
++        }
++    }
++}
++
++/// Remove escape sequences from `text` and apply its carriage returns.
++pub fn clean(text: &str) -> String {
++    apply_overwrites(&strip_escapes(text))
++}
++
++/// Remove ANSI escape sequences.
++///
++/// Handles CSI (`\x1b[…final`), OSC (`\x1b]…BEL` or `…ST`), and the two-byte
++/// escapes. An unterminated sequence at end of input is dropped rather than
++/// emitted, since a half-written escape is not content either.
++fn strip_escapes(text: &str) -> String {
++    let mut out = String::with_capacity(text.len());
++    let mut chars = text.chars().peekable();
++
++    while let Some(c) = chars.next() {
++        if c != '\x1b' {
++            // Other C0 controls are not content, but tab is, and so is the
++            // carriage return that the overwrite pass needs to see.
++            if c == '\t' || c == '\r' || !c.is_control() {
++                out.push(c);
++            }
++            continue;
++        }
++
++        match chars.next() {
++            // CSI: parameters and intermediates, then a final byte in @..~
++            Some('[') => {
++                for next in chars.by_ref() {
++                    if ('\x40'..='\x7e').contains(&next) {
++                        break;
++                    }
++                }
++            }
++            // OSC: runs to BEL or to ESC \
++            Some(']') => {
++                while let Some(next) = chars.next() {
++                    if next == '\x07' {
++                        break;
++                    }
++                    if next == '\x1b' && chars.peek() == Some(&'\\') {
++                        chars.next();
++                        break;
++                    }
++                }
++            }
++            // Anything else is a two-byte escape; the second byte is consumed.
++            Some(_) | None => {}
++        }
++    }
++
++    out
++}
++
++/// Apply carriage returns, keeping only the final state of an overwritten line.
++///
++/// A `\r` moves the cursor to column zero; what follows overwrites from there.
++/// Shorter replacements leave the tail of the previous content visible, which is
++/// what a terminal shows and therefore what the reader would have seen.
++fn apply_overwrites(text: &str) -> String {
++    if !text.contains('\r') {
++        return text.to_string();
++    }
++
++    let mut canvas: Vec<char> = Vec::new();
++    let mut cursor = 0usize;
++
++    for c in text.chars() {
++        if c == '\r' {
++            cursor = 0;
++            continue;
++        }
++        if cursor < canvas.len() {
++            canvas[cursor] = c;
++        } else {
++            canvas.push(c);
++        }
++        cursor += 1;
++    }
++
++    canvas.into_iter().collect()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::tests::doc_of;
++    use super::*;
++
++    #[test]
++    fn color_codes_are_removed() {
++        assert_eq!(clean("\x1b[31merror\x1b[0m: boom"), "error: boom");
++        assert_eq!(clean("\x1b[1;38;5;196mred\x1b[m"), "red");
++    }
++
++    #[test]
++    fn stripping_makes_later_matching_work() {
++        // The reason this stage runs first: a colored error does not match
++        // `error` until the escape is gone.
++        let colored = "\x1b[31merror\x1b[0m[E0308]";
++        assert!(!colored.starts_with("error"));
++        assert!(clean(colored).starts_with("error"));
++    }
++
++    #[test]
++    fn cursor_movement_and_erase_sequences_are_removed() {
++        assert_eq!(clean("\x1b[2K\x1b[1Gprogress"), "progress");
++        assert_eq!(clean("done\x1b[K"), "done");
++    }
++
++    #[test]
++    fn operating_system_commands_are_removed() {
++        // Terminal title sets, hyperlinks. Both terminator forms.
++        assert_eq!(clean("\x1b]0;my title\x07text"), "text");
++        assert_eq!(clean("\x1b]8;;https://example.com\x1b\\link"), "link");
++    }
++
++    #[test]
++    fn an_unterminated_escape_does_not_leak() {
++        assert_eq!(clean("text\x1b[31"), "text");
++        assert_eq!(clean("text\x1b"), "text");
++    }
++
++    #[test]
++    fn tabs_survive_and_other_controls_do_not() {
++        // A tab is layout the reader sees; a bell is not content.
++        assert_eq!(clean("a\tb"), "a\tb");
++        assert_eq!(clean("a\x07b"), "ab");
++        assert_eq!(clean("a\x00b"), "ab");
++    }
++
++    #[test]
++    fn carriage_returns_keep_only_the_final_state() {
++        // A progress bar redrawing in place: only what the reader ended up
++        // seeing survives.
++        assert_eq!(clean("10%\r50%\r100%"), "100%");
++        assert_eq!(clean("downloading\rdone"), "doneloading");
++    }
++
++    #[test]
++    fn an_overwrite_leaves_the_uncovered_tail() {
++        // What a real terminal shows. Surprising, but inventing a cleaner answer
++        // would mean showing the reader something that was never on screen.
++        assert_eq!(clean("abcdef\rxy"), "xycdef");
++    }
++
++    #[test]
++    fn text_without_escapes_is_untouched() {
++        let plain = "error: could not compile `lens`";
++        assert_eq!(clean(plain), plain);
++    }
++
++    #[test]
++    fn the_stage_leaves_line_numbers_alone() {
++        let mut doc = doc_of(&["\x1b[31mred\x1b[0m", "plain"]);
++        Ansi.apply(&mut doc, &Ctx::default());
++        assert_eq!(doc.blocks[0].lines[0].text, "red");
++        assert_eq!(doc.blocks[0].lines[0].origin, 1);
++        assert_eq!(doc.blocks[1].lines[0].origin, 2);
++    }
++
++    #[test]
++    fn the_stage_drops_nothing() {
++        // Stripping is not filtering: every line is still here afterwards.
++        let mut doc = doc_of(&["\x1b[31m\x1b[0m", "plain"]);
++        Ansi.apply(&mut doc, &Ctx::default());
++        assert!(doc.blocks.iter().all(|b| b.kept()));
++    }
++}
+diff --git a/src/pipeline/classify.rs b/src/pipeline/classify.rs
+new file mode 100644
+index 0000000..b386916
+--- /dev/null
++++ b/src/pipeline/classify.rs
+@@ -0,0 +1,338 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Assign a class to every block, and enforce the failure floor.
++//!
++//! The floor is the important half. A command that exited non-zero produced a
++//! failure somewhere in its output, and a filtered view that does not show it is
++//! the worst thing this tool can produce: the reader concludes the command
++//! succeeded and acts on that. So when the child failed and nothing was
++//! recognized as a failure, the tail of the output is force-kept — an unhelpful
++//! view is recoverable, a misleading one is not.
++
++use super::{Class, Ctx, Doc, Keep, Stage, Stream};
++
++/// The classify stage.
++#[derive(Debug, Clone, Copy)]
++pub struct Classify;
++
++impl Stage for Classify {
++    fn name(&self) -> &'static str {
++        "classify"
++    }
++
++    fn apply(&self, doc: &mut Doc, ctx: &Ctx) {
++        for block in &mut doc.blocks {
++            // The progress stage has already spoken for these.
++            if block.class == Class::Progress {
++                continue;
++            }
++            block.class = classify_text(&block.text());
++        }
++
++        if ctx.exit_code != 0 {
++            enforce_failure_floor(doc);
++        }
++    }
++}
++
++/// How many trailing blocks to rescue when a failure went unrecognized.
++const FLOOR_BLOCKS: usize = 5;
++
++/// Words that mean something failed.
++const FAILURE_WORDS: &[&str] = &[
++    "error", "errors", "failed", "failure", "failures", "panic", "panicked", "fatal", "abort",
++    "aborted",
++];
++
++/// Words that name a reported failure rather than an error message.
++const TEST_FAILURE_WORDS: &[&str] = &["failed", "failures", "failing", "not ok"];
++
++/// Words that mean something is worth knowing but not acting on.
++const WARNING_WORDS: &[&str] = &["warning", "warnings", "warn", "deprecated", "deprecation"];
++
++/// Words that carry no information on their own.
++const NOISE_WORDS: &[&str] = &["", "---", "===", "***"];
++
++/// Classify one block's text.
++///
++/// Judged line by line, and a failure word only counts where a diagnostic would
++/// put it: at the start of a line, immediately before a `:` or `[`, or in one of
++/// the fixed shapes a runner reports. Prose that happens to discuss errors —
++/// a commit message, a README, this file's own comments — is not a failure, and
++/// treating it as one is not a harmless over-count: it decides what survives
++/// budget pressure and what a level-1 view is allowed to drop.
++pub fn classify_text(text: &str) -> Class {
++    let mut class = Class::Info;
++
++    for line in text.lines() {
++        let lower = line.to_ascii_lowercase();
++
++        if is_failure_line(&lower) {
++            // `error` in a message about a test that failed is a Failure;
++            // standing alone it is an Error. Both outrank everything below, so
++            // the first one found settles the block.
++            return if contains_word(&lower, TEST_FAILURE_WORDS) && lower.contains("test") {
++                Class::Failure
++            } else {
++                Class::Error
++            };
++        }
++        if is_warning_line(&lower) {
++            class = Class::Warning;
++        }
++    }
++
++    if class == Class::Info {
++        let trimmed = text.trim();
++        if NOISE_WORDS.contains(&trimmed)
++            || (!trimmed.is_empty() && trimmed.chars().all(|c| !c.is_alphanumeric()))
++        {
++            return Class::Noise;
++        }
++    }
++
++    class
++}
++
++/// Does this line report a failure, as opposed to mentioning one?
++fn is_failure_line(lower: &str) -> bool {
++    if lower.contains("panicked at")
++        || lower.contains("traceback (most recent call last)")
++        || lower.contains("stack trace")
++    {
++        return true;
++    }
++    // The last line of a Python traceback, and the one a reader actually needs:
++    // `ValueError: ...`, `jinja2.exceptions.TemplateNotFound: ...`. The failure
++    // word is buried in a dotted type name, so no word-boundary rule finds it.
++    // What marks the line is a leading type naming an error or an exception,
++    // followed by the colon that introduces the message.
++    let first = lower.split_whitespace().next().unwrap_or("");
++    if first.ends_with(':') && (first.contains("error") || first.contains("exception")) {
++        return true;
++    }
++
++    reports(lower, FAILURE_WORDS)
++}
++
++/// The same question for warnings.
++fn is_warning_line(lower: &str) -> bool {
++    reports(lower, WARNING_WORDS)
++}
++
++/// Is one of `words` used here as a report rather than as a noun in a sentence?
++///
++/// Three shapes, which between them cover every runner and compiler worth
++/// filtering:
++///
++/// * at the start of the line — `error: mismatched types`, `FAILED: 3 tests`
++/// * immediately before punctuation that opens a detail — `error[E0308]`
++/// * counted — `2 errors emitted`, `1 failed`
++fn reports(lower: &str, words: &[&str]) -> bool {
++    let trimmed = lower.trim_start();
++
++    words.iter().any(|word| {
++        // At the start of the line.
++        if trimmed.strip_prefix(word).is_some_and(|rest| !starts_alnum(rest)) {
++            return true;
++        }
++
++        lower.match_indices(word).any(|(at, _)| {
++            let after = lower[at + word.len()..].chars().next();
++            let before_alnum = lower[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric());
++            if before_alnum {
++                return false;
++            }
++
++            // Opening a detail: `error[E0308]`, `error:`, `failure(3)`.
++            if matches!(after, Some(':') | Some('[') | Some('(')) {
++                return true;
++            }
++
++            // Counted: the word is preceded by a number.
++            let head = lower[..at].trim_end();
++            head.chars().next_back().is_some_and(|c| c.is_ascii_digit())
++        })
++    })
++}
++
++fn starts_alnum(rest: &str) -> bool {
++    rest.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
++}
++
++/// Does `lower` contain any of `words` as a whole word?
++fn contains_word(lower: &str, words: &[&str]) -> bool {
++    words.iter().any(|word| {
++        lower.match_indices(word).any(|(at, _)| {
++            let before = lower[..at].chars().next_back();
++            let after = lower[at + word.len()..].chars().next();
++            let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric() && c != '_');
++            boundary(before) && boundary(after)
++        })
++    })
++}
++
++/// Force-keep the tail when the child failed and nothing looks like a failure.
++///
++/// Deliberately blunt: it does not try to find the failure, only to guarantee
++/// the reader sees the end of the output, which is where a failure almost always
++/// is. Being wrong here costs some tokens; not doing it costs correctness.
++fn enforce_failure_floor(doc: &mut Doc) {
++    if doc.has_failure() {
++        return;
++    }
++    // stderr is where a failing command usually explains itself; when a
++    // document has none of it, the tail of stdout is the best available answer.
++    let rescue = if doc.source == Stream::Stderr { FLOOR_BLOCKS } else { FLOOR_BLOCKS.min(3) };
++
++    for block in doc.blocks.iter_mut().rev().take(rescue) {
++        if block.class == Class::Progress {
++            continue;
++        }
++        block.keep = Keep::Force;
++        block.elided = None;
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::tests::doc_of;
++    use super::*;
++
++    #[test]
++    fn failures_are_recognized() {
++        for text in [
++            "error[E0308]: mismatched types",
++            "FAILED: 3 tests did not pass",
++            "thread 'main' panicked at src/main.rs:4",
++            "fatal: not a git repository",
++            "Traceback (most recent call last):",
++            "ValueError: invalid literal for int()",
++            "jinja2.exceptions.TemplateNotFound: page.html",
++        ] {
++            assert!(
++                matches!(classify_text(text), Class::Error | Class::Failure),
++                "{text:?} classified {:?}",
++                classify_text(text)
++            );
++        }
++    }
++
++    #[test]
++    fn warnings_are_not_failures() {
++        // The shapes compilers actually emit. A sentence merely containing
++        // "deprecated" is prose, and is classified as such.
++        for text in ["warning: unused variable `x`", "warning: use of deprecated function"] {
++            assert_eq!(classify_text(text), Class::Warning, "{text:?}");
++        }
++    }
++
++    #[test]
++    fn matching_is_anchored_at_word_boundaries() {
++        // The false positive that would otherwise make everything an error.
++        assert_eq!(classify_text("the terror of it"), Class::Info);
++        assert_eq!(classify_text("unerroring"), Class::Info);
++        assert_eq!(classify_text("warningless"), Class::Info);
++        // ...and the true positive it must not cost.
++        assert_eq!(classify_text("error: compilation failed"), Class::Error);
++        assert_eq!(classify_text("2 errors emitted"), Class::Error);
++    }
++
++    #[test]
++    fn prose_about_errors_is_not_a_failure() {
++        // Found by running `lens git show` over this repository: a commit
++        // message that discusses errors was classified as fourteen failures,
++        // and level 0 reported "14 failing" for a command that exited 0.
++        for text in [
++            "classify assigns severity and enforces the floor: a non-zero exit",
++            "a filtered view of a failed command that reads as success is the",
++            "worst output this tool can produce",
++            "an error without what it was attempting is not actionable",
++            "the failure that matters is dropping a line the reader needed",
++            "Fixes the error handling in the parser",
++        ] {
++            assert_eq!(classify_text(text), Class::Info, "{text:?}");
++        }
++    }
++
++    #[test]
++    fn the_more_serious_signal_wins() {
++        // Under budget pressure this decides which block survives, so a block
++        // that mentions both has to be treated as the failure it contains.
++        assert_eq!(classify_text("warning: x\nerror: y"), Class::Error);
++    }
++
++    #[test]
++    fn separators_are_noise() {
++        assert_eq!(classify_text("---------"), Class::Noise);
++        assert_eq!(classify_text("========="), Class::Noise);
++        assert_eq!(classify_text("ordinary output"), Class::Info);
++    }
++
++    #[test]
++    fn progress_classification_is_not_overwritten() {
++        let mut doc = doc_of(&["   Compiling lens v0.1.0"]);
++        doc.blocks[0].class = Class::Progress;
++        Classify.apply(&mut doc, &Ctx::default());
++        assert_eq!(doc.blocks[0].class, Class::Progress);
++    }
++
++    #[test]
++    fn a_failing_command_always_shows_something() {
++        // The bug this exists to prevent: exit code 1, and a view with no sign
++        // of failure anywhere in it.
++        let mut doc = doc_of(&["setting up", "running", "cleaning up", "goodbye"]);
++        let ctx = Ctx { exit_code: 1, ..Ctx::default() };
++        Classify.apply(&mut doc, &ctx);
++
++        let forced = doc.blocks.iter().filter(|b| b.keep == Keep::Force).count();
++        assert!(forced > 0, "a failing command must force-keep something");
++        assert!(doc.blocks.last().unwrap().keep == Keep::Force, "the tail is what is kept");
++    }
++
++    #[test]
++    fn the_floor_does_not_fire_when_a_failure_is_visible() {
++        // Nothing to rescue: the failure is already in the view, so forcing the
++        // tail would spend tokens on nothing.
++        let mut doc = doc_of(&["ok", "error: boom", "ok"]);
++        let ctx = Ctx { exit_code: 1, ..Ctx::default() };
++        Classify.apply(&mut doc, &ctx);
++        assert!(doc.blocks.iter().all(|b| b.keep != Keep::Force));
++    }
++
++    #[test]
++    fn the_floor_does_not_fire_on_success() {
++        let mut doc = doc_of(&["all good", "done"]);
++        Classify.apply(&mut doc, &Ctx::default());
++        assert!(doc.blocks.iter().all(|b| b.keep != Keep::Force));
++    }
++
++    #[test]
++    fn the_floor_rescues_a_block_progress_had_dropped() {
++        // A failing command whose last real line was dropped by an earlier
++        // stage still has to show it.
++        let mut doc = doc_of(&["step one", "quietly wrong"]);
++        doc.blocks[1].drop_with("dedupe");
++        let ctx = Ctx { exit_code: 2, ..Ctx::default() };
++        Classify.apply(&mut doc, &ctx);
++
++        assert!(doc.blocks[1].kept(), "the tail is back in the view");
++        assert!(doc.blocks[1].elided.is_none(), "and is no longer reported as removed");
++    }
++
++    #[test]
++    fn stderr_gets_a_deeper_rescue_than_stdout() {
++        let failing = Ctx { exit_code: 1, ..Ctx::default() };
++        let lines = &["a", "b", "c", "d", "e", "f", "g"];
++
++        let mut out = doc_of(lines);
++        Classify.apply(&mut out, &failing);
++        let mut err = doc_of(lines);
++        err.source = Stream::Stderr;
++        Classify.apply(&mut err, &failing);
++
++        let forced = |doc: &Doc| doc.blocks.iter().filter(|b| b.keep == Keep::Force).count();
++        assert!(forced(&err) > forced(&out), "stderr is where a failure explains itself");
++    }
++}
+diff --git a/src/pipeline/context.rs b/src/pipeline/context.rs
+new file mode 100644
+index 0000000..e3ad043
+--- /dev/null
++++ b/src/pipeline/context.rs
+@@ -0,0 +1,135 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Keep what makes a failure actionable.
++//!
++//! An error message on its own says something went wrong. The blocks around it
++//! say what was being attempted, which file, which test, what the arguments
++//! were — and that is the difference between a reader who can act and a reader
++//! who has to ask for more.
++//!
++//! So context is force-kept rather than merely kept: budget pressure may drop an
++//! error's neighbours only after it has dropped everything else, and this stage
++//! is what says so.
++
++use super::{Class, Ctx, Doc, Stage};
++
++/// The context stage.
++#[derive(Debug, Clone, Copy)]
++pub struct Context;
++
++impl Stage for Context {
++    fn name(&self) -> &'static str {
++        "context"
++    }
++
++    fn apply(&self, doc: &mut Doc, ctx: &Ctx) {
++        let failures: Vec<usize> = doc
++            .blocks
++            .iter()
++            .enumerate()
++            .filter(|(_, block)| matches!(block.class, Class::Error | Class::Failure))
++            .map(|(index, _)| index)
++            .collect();
++
++        for index in failures {
++            let first = index.saturating_sub(ctx.context_blocks);
++            let last = (index + ctx.context_blocks).min(doc.blocks.len().saturating_sub(1));
++
++            for neighbour in first..=last {
++                // Progress churn next to an error is still churn. Rescuing it
++                // would spend the budget that the error's real context needs.
++                if doc.blocks[neighbour].class == Class::Progress {
++                    continue;
++                }
++                doc.blocks[neighbour].force();
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::tests::doc_of;
++    use super::super::{Keep, classify};
++    use super::*;
++
++    /// Classify then apply context, which is the order the pipeline uses.
++    fn run(lines: &[&str], context_blocks: usize) -> Doc {
++        let mut doc = doc_of(lines);
++        let ctx = Ctx { exit_code: 0, context_blocks };
++        classify::Classify.apply(&mut doc, &ctx);
++        Context.apply(&mut doc, &ctx);
++        doc
++    }
++
++    #[test]
++    fn blocks_around_a_failure_are_forced() {
++        let doc = run(&["far", "before", "error: boom", "after", "far"], 1);
++        let forced: Vec<bool> = doc.blocks.iter().map(|b| b.keep == Keep::Force).collect();
++        assert_eq!(forced, vec![false, true, true, true, false]);
++    }
++
++    #[test]
++    fn context_reaches_as_far_as_configured() {
++        let doc = run(&["a", "b", "c", "error: boom", "e", "f", "g"], 3);
++        assert!(doc.blocks.iter().all(|b| b.keep == Keep::Force));
++    }
++
++    #[test]
++    fn zero_context_forces_only_the_failure() {
++        let doc = run(&["before", "error: boom", "after"], 0);
++        let forced: Vec<bool> = doc.blocks.iter().map(|b| b.keep == Keep::Force).collect();
++        assert_eq!(forced, vec![false, true, false]);
++    }
++
++    #[test]
++    fn context_at_the_edges_does_not_panic() {
++        let doc = run(&["error: first thing"], 3);
++        assert_eq!(doc.blocks[0].keep, Keep::Force);
++
++        let doc = run(&["ok", "error: last thing"], 3);
++        assert!(doc.blocks.iter().all(|b| b.keep == Keep::Force));
++    }
++
++    #[test]
++    fn context_rescues_a_block_an_earlier_stage_dropped() {
++        // A duplicate line next to an error is the error's context, and the
++        // reader needs it more than dedupe needed to remove it.
++        let mut doc = doc_of(&["running check", "error: boom"]);
++        doc.blocks[0].drop_with("dedupe");
++
++        let ctx = Ctx { exit_code: 0, context_blocks: 1 };
++        classify::Classify.apply(&mut doc, &ctx);
++        Context.apply(&mut doc, &ctx);
++
++        assert!(doc.blocks[0].kept());
++        assert!(doc.blocks[0].elided.is_none(), "nothing is reported as removed");
++    }
++
++    #[test]
++    fn progress_next_to_a_failure_stays_dropped() {
++        // Churn does not become worth reading by being adjacent to an error,
++        // and the budget it would take belongs to the real context.
++        let mut doc = doc_of(&["   Compiling foo v1.0", "error: boom"]);
++        let ctx = Ctx { exit_code: 0, context_blocks: 1 };
++        super::super::progress::Progress.apply(&mut doc, &ctx);
++        classify::Classify.apply(&mut doc, &ctx);
++        Context.apply(&mut doc, &ctx);
++
++        assert!(!doc.blocks[0].kept(), "progress is not rescued");
++        assert!(doc.blocks[1].kept());
++    }
++
++    #[test]
++    fn a_document_without_failures_is_untouched() {
++        let doc = run(&["one", "two", "three"], 3);
++        assert!(doc.blocks.iter().all(|b| b.keep != Keep::Force));
++    }
++
++    #[test]
++    fn overlapping_windows_do_not_conflict() {
++        let doc = run(&["a", "error: one", "b", "error: two", "c"], 1);
++        assert!(doc.blocks.iter().all(|b| b.keep == Keep::Force));
++    }
++}
+diff --git a/src/pipeline/dedupe.rs b/src/pipeline/dedupe.rs
+new file mode 100644
+index 0000000..3c48da7
+--- /dev/null
++++ b/src/pipeline/dedupe.rs
+@@ -0,0 +1,373 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Collapse repetition.
++//!
++//! The same warning emitted four hundred times tells the reader one thing, and
++//! the four hundredth copy costs as much context as the first. Two shapes are
++//! worth collapsing:
++//!
++//! * consecutive identical blocks — the same line or stanza, over and over;
++//! * a repeated multi-block pattern, which is what a loop or a per-file check
++//!   produces.
++//!
++//! What makes this safe is that the count survives. "×400" is the information
++//! the four hundred copies carried, so nothing decision-relevant is lost — and
++//! the copies are still in the store if the reader wants them.
++
++use super::{Block, Class, Ctx, Doc, Keep, Line, Stage};
++
++/// The dedupe stage.
++#[derive(Debug, Clone, Copy)]
++pub struct Dedupe;
++
++impl Stage for Dedupe {
++    fn name(&self) -> &'static str {
++        "dedupe"
++    }
++
++    fn apply(&self, doc: &mut Doc, _ctx: &Ctx) {
++        split_repeated_lines(doc);
++        collapse_consecutive(doc);
++        collapse_repeated_windows(doc);
++    }
++}
++
++/// Split runs of identical lines inside a block into their own blocks.
++///
++/// The adapter has no reason to break a run of identical lines apart — from its
++/// side they are one stanza — so the commonest repetition of all, the same
++/// warning printed a hundred times with nothing between, arrives as a single
++/// block. Splitting it here lets the same marking machinery handle it, which
++/// keeps every removal countable and every line's origin intact.
++fn split_repeated_lines(doc: &mut Doc) {
++    /// Runs longer than this collapse; a pair stays whole, because replacing
++    /// one of two copies with a count saves nothing worth the reader's doubt.
++    const MIN_RUN: usize = 2;
++
++    if !doc.blocks.iter().any(has_repeated_lines) {
++        return;
++    }
++
++    let mut rebuilt: Vec<Block> = Vec::with_capacity(doc.blocks.len());
++
++    for block in std::mem::take(&mut doc.blocks) {
++        if block.keep == Keep::Drop || !has_repeated_lines(&block) {
++            rebuilt.push(block);
++            continue;
++        }
++
++        let class = block.class;
++        let keep = block.keep;
++        let mut plain: Vec<Line> = Vec::new();
++        let mut lines = block.lines.into_iter().peekable();
++
++        while let Some(line) = lines.next() {
++            let mut copies: Vec<Line> = Vec::new();
++            while lines.peek().is_some_and(|next| next.text == line.text) {
++                copies.push(lines.next().expect("peeked"));
++            }
++
++            if copies.len() < MIN_RUN {
++                // Below the threshold: the run stays whole. The copies go back
++                // with it — dropping them here would remove content with no
++                // count and no marker, which is the one thing no stage may do.
++                plain.push(line);
++                plain.extend(copies);
++                continue;
++            }
++
++            // Everything gathered so far ends its own block, then the survivor
++            // and its copies each get one.
++            if !plain.is_empty() {
++                rebuilt.push(rebuild(std::mem::take(&mut plain), class, keep));
++            }
++
++            let total = copies.len() + 1;
++            let mut survivor = rebuild(vec![line], class, keep);
++            annotate_block(&mut survivor, total);
++            rebuilt.push(survivor);
++
++            let mut dropped = rebuild(copies, class, keep);
++            dropped.drop_with("dedupe");
++            rebuilt.push(dropped);
++        }
++
++        if !plain.is_empty() {
++            rebuilt.push(rebuild(plain, class, keep));
++        }
++    }
++
++    doc.blocks = rebuilt;
++}
++
++/// Does this block contain two or more identical lines in a row?
++fn has_repeated_lines(block: &Block) -> bool {
++    block.lines.windows(2).any(|pair| pair[0].text == pair[1].text)
++}
++
++/// A block carrying the class and keep state of the one it came from.
++fn rebuild(lines: Vec<Line>, class: Class, keep: Keep) -> Block {
++    let mut block = Block::new(lines);
++    block.class = class;
++    block.keep = keep;
++    block
++}
++
++/// Drop consecutive blocks identical to the one before them, annotating the
++/// survivor with how many there were.
++fn collapse_consecutive(doc: &mut Doc) {
++    let mut anchor: Option<usize> = None;
++    let mut repeats = 0usize;
++
++    for index in 0..doc.blocks.len() {
++        let same_as_anchor = anchor.is_some_and(|a| {
++            doc.blocks[a].lines.len() == doc.blocks[index].lines.len()
++                && doc.blocks[a]
++                    .lines
++                    .iter()
++                    .zip(&doc.blocks[index].lines)
++                    .all(|(x, y)| x.text == y.text)
++        });
++
++        if same_as_anchor && doc.blocks[index].kept() {
++            if doc.blocks[index].drop_with("dedupe") {
++                repeats += 1;
++            }
++            continue;
++        }
++
++        if let (Some(a), 1..) = (anchor, repeats) {
++            annotate(doc, a, repeats + 1);
++        }
++        anchor = doc.blocks[index].kept().then_some(index);
++        repeats = 0;
++    }
++
++    if let (Some(a), 1..) = (anchor, repeats) {
++        annotate(doc, a, repeats + 1);
++    }
++}
++
++/// Find a repeated run of blocks and drop every copy after the first.
++///
++/// A rolling window over normalized block text, longest window first: a loop
++/// that emits three blocks per iteration should collapse as three, not as one
++/// block repeated three times out of phase.
++fn collapse_repeated_windows(doc: &mut Doc) {
++    const MAX_WINDOW: usize = 8;
++    const MIN_REPEATS: usize = 3;
++
++    let live: Vec<usize> = (0..doc.blocks.len()).filter(|i| doc.blocks[*i].kept()).collect();
++    if live.len() < MIN_REPEATS * 2 {
++        return;
++    }
++
++    let text: Vec<String> = live.iter().map(|i| normalize(&doc.blocks[*i].text())).collect();
++
++    for window in (2..=MAX_WINDOW.min(live.len() / MIN_REPEATS)).rev() {
++        let mut start = 0usize;
++        while start + window * MIN_REPEATS <= live.len() {
++            let pattern = &text[start..start + window];
++            let mut repeats = 1usize;
++            while start + window * (repeats + 1) <= live.len()
++                && text[start + window * repeats..start + window * (repeats + 1)] == *pattern
++            {
++                repeats += 1;
++            }
++
++            if repeats >= MIN_REPEATS {
++                for copy in 1..repeats {
++                    for offset in 0..window {
++                        let index = live[start + window * copy + offset];
++                        doc.blocks[index].drop_with("dedupe");
++                    }
++                }
++                annotate(doc, live[start + window - 1], repeats);
++                start += window * repeats;
++            } else {
++                start += 1;
++            }
++        }
++    }
++}
++
++/// Append the repeat count to a block's last line.
++///
++/// The annotation is marked with the same `[lens:` prefix every other
++/// announcement uses, so nothing Lens wrote can be mistaken for something the
++/// command wrote.
++fn annotate(doc: &mut Doc, index: usize, total: usize) {
++    let Some(block) = doc.blocks.get_mut(index) else { return };
++    annotate_block(block, total);
++}
++
++fn annotate_block(block: &mut Block, total: usize) {
++    let Some(last) = block.lines.last_mut() else { return };
++    if last.text.contains("[lens: ×") {
++        return;
++    }
++    last.text.push_str(&format!("  [lens: ×{total}]"));
++}
++
++/// Strip variable detail so two runs of the same work compare equal.
++///
++/// Timings, addresses and counters differ on every iteration and mean nothing to
++/// the comparison. Digits are the whole of that difference in practice, and
++/// flattening them is cheaper than parsing.
++fn normalize(text: &str) -> String {
++    let mut out = String::with_capacity(text.len());
++    let mut in_digits = false;
++    for c in text.chars() {
++        if c.is_ascii_digit() {
++            if !in_digits {
++                out.push('#');
++                in_digits = true;
++            }
++        } else {
++            in_digits = false;
++            out.push(c);
++        }
++    }
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::tests::doc_of;
++    use super::*;
++
++    fn kept(doc: &Doc) -> Vec<String> {
++        doc.blocks.iter().filter(|b| b.kept()).map(|b| b.text()).collect()
++    }
++
++    #[test]
++    fn consecutive_duplicates_collapse_to_one_with_a_count() {
++        let mut doc = doc_of(&["warn: x", "warn: x", "warn: x", "done"]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++
++        assert_eq!(kept(&doc), vec!["warn: x  [lens: ×3]", "done"]);
++        assert_eq!(doc.elided_line_count(), 2);
++    }
++
++    #[test]
++    fn the_count_is_what_replaces_the_copies() {
++        // The claim that makes this safe: the information in 400 copies is the
++        // number 400, and it survives.
++        let lines: Vec<&str> = std::iter::repeat_n("warning: unused", 400).collect();
++        let mut doc = doc_of(&lines);
++        Dedupe.apply(&mut doc, &Ctx::default());
++
++        assert_eq!(kept(&doc).len(), 1);
++        assert!(kept(&doc)[0].contains("×400"));
++    }
++
++    #[test]
++    fn a_single_occurrence_is_not_annotated() {
++        let mut doc = doc_of(&["one", "two", "three"]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++        assert_eq!(kept(&doc), vec!["one", "two", "three"]);
++    }
++
++    #[test]
++    fn non_consecutive_duplicates_both_survive() {
++        // Position carries meaning: the same warning before and after a fix is
++        // two facts, not one repeated.
++        let mut doc = doc_of(&["warn: x", "other", "warn: x"]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++        assert_eq!(kept(&doc), vec!["warn: x", "other", "warn: x"]);
++    }
++
++    #[test]
++    fn a_repeated_pattern_collapses_as_a_unit() {
++        // A per-file loop emitting two lines each: three iterations collapse to
++        // one, counted — not to one line repeated six times.
++        let mut doc = doc_of(&[
++            "checking file 1",
++            "  ok",
++            "checking file 2",
++            "  ok",
++            "checking file 3",
++            "  ok",
++        ]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++
++        let survivors = kept(&doc);
++        assert_eq!(survivors.len(), 2, "one iteration survives: {survivors:?}");
++        assert!(survivors[1].contains("×3"), "{survivors:?}");
++    }
++
++    #[test]
++    fn varying_numbers_do_not_defeat_pattern_matching() {
++        // Timings differ every iteration and mean nothing to the comparison.
++        let mut doc = doc_of(&[
++            "run 1",
++            "  took 12ms",
++            "run 2",
++            "  took 47ms",
++            "run 3",
++            "  took 8ms",
++            "run 4",
++            "  took 91ms",
++        ]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++        assert!(kept(&doc).len() < 8, "repeats should collapse: {:?}", kept(&doc));
++    }
++
++    #[test]
++    fn a_pair_of_identical_lines_survives_intact() {
++        // The bug this caught: a run below the collapse threshold had its
++        // copies discarded — content gone with no count and no marker.
++        let mut doc = Doc {
++            blocks: vec![Block::new(vec![
++                Line { text: "warning: a".into(), origin: 1 },
++                Line { text: "warning: a".into(), origin: 2 },
++            ])],
++            source: super::super::Stream::Stdout,
++        };
++        Dedupe.apply(&mut doc, &Ctx::default());
++
++        let kept_lines: usize = doc.blocks.iter().filter(|b| b.kept()).map(|b| b.lines.len()).sum();
++        assert_eq!(kept_lines, 2, "both copies stay: {:?}", kept(&doc));
++    }
++
++    #[test]
++    fn two_repeats_are_left_alone() {
++        // Below the threshold. Collapsing a pair saves one block and costs the
++        // reader the second copy's detail, which is a bad trade.
++        let mut doc = doc_of(&["a", "b", "a", "b"]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++        assert_eq!(kept(&doc).len(), 4);
++    }
++
++    #[test]
++    fn a_forced_block_survives_deduplication() {
++        let mut doc = doc_of(&["same", "same", "same"]);
++        doc.blocks[2].force();
++        Dedupe.apply(&mut doc, &Ctx::default());
++        assert!(doc.blocks[2].kept());
++    }
++
++    #[test]
++    fn annotation_is_marked_as_ours() {
++        // Nothing Lens writes may be mistaken for something the command wrote.
++        let mut doc = doc_of(&["x", "x", "x"]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++        assert!(kept(&doc)[0].contains("[lens:"));
++    }
++
++    #[test]
++    fn annotating_twice_does_not_stack() {
++        let mut doc = doc_of(&["x", "x", "x"]);
++        Dedupe.apply(&mut doc, &Ctx::default());
++        Dedupe.apply(&mut doc, &Ctx::default());
++        assert_eq!(kept(&doc)[0].matches("[lens:").count(), 1);
++    }
++
++    #[test]
++    fn normalization_flattens_digit_runs() {
++        assert_eq!(normalize("took 1234ms"), "took #ms");
++        assert_eq!(normalize("0x7f8a"), "#x#f#a");
++        assert_eq!(normalize("no digits"), "no digits");
++    }
++}
+diff --git a/src/pipeline/mod.rs b/src/pipeline/mod.rs
+new file mode 100644
+index 0000000..0d803c9
+--- /dev/null
++++ b/src/pipeline/mod.rs
+@@ -0,0 +1,413 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! The document model and the stage runner.
++//!
++//! Stages operate on a structured document rather than on a string. That is what
++//! makes them composable, and it is what makes an elision marker possible: a
++//! stage that wants content gone marks the block, and the renderer — the one
++//! place that removes anything — knows how much was removed and why.
++//!
++//! Three rules hold for every stage:
++//!
++//! * A stage may mark, merge, or annotate blocks. It may not delete them.
++//! * A stage may not mutate [`Line::origin`]. Line numbers in the raw stream are
++//!   what make a `file:line` reference in the output still resolve.
++//! * Dropping means setting [`Keep::Drop`] and recording an [`Elision`]. What was
++//!   removed is always countable, and therefore always announceable.
++
++use crate::static_assert_size_and_align;
++
++pub mod ansi;
++pub mod classify;
++pub mod context;
++pub mod dedupe;
++pub mod progress;
++
++/// Which stream a document came from.
++///
++/// Kept separate all the way through: a line's stream is a signal, and merging
++/// the two would discard it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Stream {
++    /// The child's stdout.
++    Stdout,
++    /// The child's stderr.
++    Stderr,
++}
++
++/// One line of output, and where it came from.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Line {
++    /// The line's text, without its terminator.
++    pub text: String,
++    /// 1-based index in the raw stream. Never mutated, by any stage, ever.
++    pub origin: usize,
++}
++
++// One `Line` per input line, and a large fixture is hundreds of thousands of
++// them. A field added here is a throughput regression that the benchmark would
++// report only as a mystery, so the size is pinned at the declaration.
++static_assert_size_and_align!(Line, 32, 8);
++
++/// What a block is, as far as filtering is concerned.
++///
++/// Severity, not structure. Structure arrives with the adapters that can
++/// actually recognize it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
++pub enum Class {
++    /// Something failed and the reader needs to see it.
++    Error,
++    /// A reported failure — a test, a check — as distinct from an error message.
++    Failure,
++    /// Worth knowing, not worth acting on immediately.
++    Warning,
++    /// Ordinary output.
++    #[default]
++    Info,
++    /// A progress indicator: a spinner, a percentage, a download counter.
++    Progress,
++    /// Content with no information in it at all.
++    Noise,
++}
++
++static_assert_size_and_align!(Class, 1, 1);
++
++/// Whether a block survives.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
++pub enum Keep {
++    /// Survives regardless of budget pressure.
++    Force,
++    /// Survives unless something drops it.
++    #[default]
++    Normal,
++    /// Removed by the renderer, with its elision announced.
++    Drop,
++}
++
++/// A record of content outside the current view.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Elision {
++    /// How many lines are not being shown.
++    pub lines_removed: usize,
++    /// Which stage removed them, for the marker and the debug report.
++    pub reason: &'static str,
++}
++
++/// A run of lines treated as one unit.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Block {
++    /// The lines, in order.
++    pub lines: Vec<Line>,
++    /// Assigned by the classify stage.
++    pub class: Class,
++    /// Whether the renderer will emit it.
++    pub keep: Keep,
++    /// Set when `keep` is [`Keep::Drop`].
++    pub elided: Option<Elision>,
++}
++
++impl Block {
++    /// A block of ordinary output.
++    pub fn new(lines: Vec<Line>) -> Self {
++        Block { lines, class: Class::default(), keep: Keep::default(), elided: None }
++    }
++
++    /// Mark this block as outside the view, recording why.
++    ///
++    /// A forced block is never dropped: whatever wanted it gone loses to
++    /// whatever insisted it stay, and the caller is told nothing was removed.
++    pub fn drop_with(&mut self, reason: &'static str) -> bool {
++        if self.keep == Keep::Force {
++            return false;
++        }
++        self.keep = Keep::Drop;
++        self.elided = Some(Elision { lines_removed: self.lines.len(), reason });
++        true
++    }
++
++    /// Keep this block regardless of what any later stage wants.
++    pub fn force(&mut self) {
++        self.keep = Keep::Force;
++        self.elided = None;
++    }
++
++    /// Is this block part of the view?
++    pub fn kept(&self) -> bool {
++        self.keep != Keep::Drop
++    }
++
++    /// The block's text, lines joined with newlines.
++    pub fn text(&self) -> String {
++        self.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n")
++    }
++}
++
++/// One stream, parsed into blocks.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Doc {
++    /// The blocks, in the order they appeared.
++    pub blocks: Vec<Block>,
++    /// Which stream this came from.
++    pub source: Stream,
++}
++
++impl Doc {
++    /// An empty document for `source`.
++    pub fn empty(source: Stream) -> Self {
++        Doc { blocks: Vec::new(), source }
++    }
++
++    /// Total lines across every block, dropped ones included.
++    pub fn line_count(&self) -> usize {
++        self.blocks.iter().map(|block| block.lines.len()).sum()
++    }
++
++    /// Lines that survive into the view.
++    pub fn kept_line_count(&self) -> usize {
++        self.blocks.iter().filter(|b| b.kept()).map(|b| b.lines.len()).sum()
++    }
++
++    /// Lines removed, summed from what the stages recorded.
++    ///
++    /// Test-only: the production path derives the same figure by subtracting
++    /// kept lines from the total, and two ways of counting the same thing is
++    /// one way for them to disagree. Here it checks that the elisions stages
++    /// recorded add up to what actually left the view.
++    #[cfg(test)]
++    pub fn elided_line_count(&self) -> usize {
++        self.blocks.iter().filter_map(|b| b.elided.as_ref()).map(|e| e.lines_removed).sum()
++    }
++
++    /// Does this document have anything classified as a failure?
++    pub fn has_failure(&self) -> bool {
++        self.blocks.iter().any(|b| matches!(b.class, Class::Error | Class::Failure))
++    }
++}
++
++/// What a stage needs to know about the run it is filtering.
++#[derive(Debug, Clone, Copy)]
++pub struct Ctx {
++    /// The code the command exited with. A non-zero code changes what may be
++    /// dropped: output that hides a failure is the worst thing this tool can
++    /// produce.
++    pub exit_code: i32,
++    /// How many blocks of context to keep around a failure.
++    pub context_blocks: usize,
++}
++
++impl Default for Ctx {
++    fn default() -> Self {
++        Ctx { exit_code: 0, context_blocks: 3 }
++    }
++}
++
++/// One filtering step.
++///
++/// Stages do not return errors. A stage that cannot do its job leaves the
++/// document alone, because the alternative — failing the run — would turn a
++/// filtering problem into the user's problem.
++pub trait Stage {
++    /// The stage's name, as it appears in the debug report and the log.
++    fn name(&self) -> &'static str;
++
++    /// Mark, merge or annotate. Never delete.
++    fn apply(&self, doc: &mut Doc, ctx: &Ctx);
++}
++
++/// Run `stages` over `doc`, in order.
++pub fn run(doc: &mut Doc, stages: &[&dyn Stage], ctx: &Ctx) {
++    for stage in stages {
++        stage.apply(doc, ctx);
++    }
++}
++
++/// The default stage list.
++pub fn default_stages() -> Vec<&'static dyn Stage> {
++    vec![&ansi::Ansi, &progress::Progress, &dedupe::Dedupe, &classify::Classify, &context::Context]
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// A document of single-line blocks, numbered from 1.
++    pub(crate) fn doc_of(lines: &[&str]) -> Doc {
++        let blocks = lines
++            .iter()
++            .enumerate()
++            .map(|(i, text)| Block::new(vec![Line { text: (*text).to_string(), origin: i + 1 }]))
++            .collect();
++        Doc { blocks, source: Stream::Stdout }
++    }
++
++    #[test]
++    fn filtering_is_linear_in_the_input() {
++        // Parsing was quadratic once: it asked "does this block have an indented
++        // line?" by scanning the block, for every line, and a command that
++        // prints ten thousand unindented lines is one block. 40k lines took
++        // 451ms. This is the guard that keeps it from coming back.
++        let time_for = |n: usize| {
++            let text: String = (1..=n).map(|i| format!("line number {i}\n")).collect();
++            let start = std::time::Instant::now();
++            let mut doc = crate::adapters::parse(text.as_bytes(), Stream::Stdout);
++            run(&mut doc, &default_stages(), &Ctx::default());
++            let _ = crate::render::render(&doc, crate::render::Level::Detail, Some("h"));
++            start.elapsed().as_secs_f64()
++        };
++
++        // Warm the allocator so the first measurement is not the slowest.
++        let _ = time_for(2_000);
++
++        let small = time_for(10_000).max(1e-6);
++        let large = time_for(40_000);
++        let growth = large / small;
++
++        // Four times the input should cost about four times as much. The bound
++        // is generous because this runs on shared CI hardware; the failure it
++        // catches is quadratic growth, which showed up here as 14x.
++        assert!(growth < 10.0, "4x the input cost {growth:.1}x the time");
++    }
++
++    #[test]
++    fn dropping_a_block_records_what_was_removed() {
++        let mut block = Block::new(vec![
++            Line { text: "a".into(), origin: 1 },
++            Line { text: "b".into(), origin: 2 },
++        ]);
++        assert!(block.drop_with("progress"));
++        assert!(!block.kept());
++        let elision = block.elided.expect("an elision is recorded");
++        assert_eq!(elision.lines_removed, 2);
++        assert_eq!(elision.reason, "progress");
++    }
++
++    #[test]
++    fn a_forced_block_cannot_be_dropped() {
++        // The rule that makes context worth having: whatever insisted a block
++        // stay outranks whatever later wants it gone.
++        let mut block = Block::new(vec![Line { text: "panic!".into(), origin: 9 }]);
++        block.force();
++        assert!(!block.drop_with("budget"), "the drop is refused");
++        assert!(block.kept());
++        assert!(block.elided.is_none(), "and nothing is reported as removed");
++    }
++
++    #[test]
++    fn forcing_a_dropped_block_clears_its_elision() {
++        let mut block = Block::new(vec![Line { text: "x".into(), origin: 1 }]);
++        block.drop_with("progress");
++        block.force();
++        assert!(block.kept());
++        assert!(block.elided.is_none(), "a block in the view has nothing elided");
++    }
++
++    #[test]
++    fn counts_split_between_kept_and_elided() {
++        let mut doc = doc_of(&["one", "two", "three"]);
++        doc.blocks[1].drop_with("progress");
++        assert_eq!(doc.line_count(), 3);
++        assert_eq!(doc.kept_line_count(), 2);
++        assert_eq!(doc.elided_line_count(), 1);
++    }
++
++    #[test]
++    fn stages_run_in_order() {
++        struct Marker(&'static str);
++        impl Stage for Marker {
++            fn name(&self) -> &'static str {
++                self.0
++            }
++            fn apply(&self, doc: &mut Doc, _ctx: &Ctx) {
++                doc.blocks[0].lines[0].text.push_str(self.0);
++            }
++        }
++
++        let mut doc = doc_of(&[""]);
++        let (first, second) = (Marker("1"), Marker("2"));
++        run(&mut doc, &[&first, &second], &Ctx::default());
++        assert_eq!(doc.blocks[0].lines[0].text, "12");
++    }
++
++    #[test]
++    fn no_stage_mutates_a_line_origin() {
++        // The property that keeps `file:line` references resolving. Asserted
++        // here across the whole default stage list rather than per stage, so a
++        // new stage inherits the check.
++        let mut doc = doc_of(&[
++            "error: something failed",
++            "  --> src/main.rs:12:5",
++            "Compiling foo v0.1.0",
++            " 45% downloading",
++            "warning: unused",
++        ]);
++        let before: Vec<usize> =
++            doc.blocks.iter().flat_map(|b| &b.lines).map(|l| l.origin).collect();
++
++        let stages = default_stages();
++        run(&mut doc, &stages, &Ctx::default());
++
++        let after: Vec<usize> =
++            doc.blocks.iter().flat_map(|b| &b.lines).map(|l| l.origin).collect();
++        assert_eq!(before, after);
++    }
++
++    #[test]
++    fn no_stage_removes_a_block() {
++        // Removal happens once, in the renderer. A stage that deletes would make
++        // the elision uncountable, and an uncountable elision cannot be
++        // announced.
++        let mut doc = doc_of(&["Compiling foo", " 10%", " 20%", "error: boom", "done"]);
++        let before = doc.blocks.len();
++
++        let stages = default_stages();
++        run(&mut doc, &stages, &Ctx::default());
++
++        assert_eq!(doc.blocks.len(), before);
++        assert!(doc.blocks.iter().any(|b| !b.kept()), "something was marked, not deleted");
++    }
++
++    #[test]
++    fn no_line_is_lost_without_being_counted() {
++        // The accounting identity behind every marker: what the reader sees plus
++        // what the stages recorded as removed equals what the command produced.
++        // A stage that drops a line without recording it breaks this, and a
++        // broken elision count is content that disappears unannounced.
++        let inputs: [&[&str]; 5] = [
++            &["warning: a", "warning: a"],
++            &["warning: a", "warning: a", "warning: a"],
++            &["   Compiling foo v1.0", "error: boom", "   Compiling bar v1.0"],
++            &["a", "b", "a", "b", "a", "b"],
++            &["one", "", "two"],
++        ];
++
++        for lines in inputs {
++            for exit_code in [0, 1] {
++                let mut doc = doc_of(lines);
++                let before = doc.line_count();
++                run(&mut doc, &default_stages(), &Ctx { exit_code, ..Ctx::default() });
++
++                assert_eq!(
++                    doc.kept_line_count() + doc.elided_line_count(),
++                    before,
++                    "{lines:?} at exit {exit_code}: {} kept + {} elided != {before}",
++                    doc.kept_line_count(),
++                    doc.elided_line_count()
++                );
++            }
++        }
++    }
++
++    #[test]
++    fn every_dropped_block_carries_an_elision() {
++        let mut doc = doc_of(&["Compiling foo", " 42% done", "ok"]);
++        let stages = default_stages();
++        run(&mut doc, &stages, &Ctx::default());
++
++        for block in doc.blocks.iter().filter(|b| !b.kept()) {
++            let elision = block.elided.as_ref().expect("a dropped block says what went");
++            assert_eq!(elision.lines_removed, block.lines.len());
++            assert!(!elision.reason.is_empty());
++        }
++    }
++}
+diff --git a/src/pipeline/progress.rs b/src/pipeline/progress.rs
+new file mode 100644
+index 0000000..3f827f4
+--- /dev/null
++++ b/src/pipeline/progress.rs
+@@ -0,0 +1,222 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Drop progress indicators.
++//!
++//! Progress output is written for a human watching a terminal. By the time
++//! anything reads it, it describes work that has already finished — the reader
++//! learns nothing from `47%` that the final line does not say better.
++//!
++//! It is also the single largest source of volume in build and test output,
++//! which makes it the cheapest thing this pipeline removes: high count, zero
++//! decision-relevant content.
++
++use super::{Class, Ctx, Doc, Stage};
++
++/// The progress stage.
++#[derive(Debug, Clone, Copy)]
++pub struct Progress;
++
++impl Stage for Progress {
++    fn name(&self) -> &'static str {
++        "progress"
++    }
++
++    fn apply(&self, doc: &mut Doc, _ctx: &Ctx) {
++        for block in &mut doc.blocks {
++            if block.lines.iter().all(|line| is_progress(&line.text)) {
++                block.class = Class::Progress;
++                block.drop_with("progress");
++            }
++        }
++    }
++}
++
++/// Verbs that name work in flight rather than a result.
++///
++/// Matched at the start of a line, after leading whitespace, and only when
++/// followed by an argument — `Compiling lens v0.1.0` is churn, but a bare
++/// `Compiling` on its own is unusual enough to leave alone.
++const PROGRESS_VERBS: &[&str] = &[
++    "Compiling",
++    "Downloading",
++    "Downloaded",
++    "Updating",
++    "Fetching",
++    "Installing",
++    "Unpacking",
++    "Resolving",
++    "Building",
++    "Waiting",
++];
++
++/// Is this line progress rather than content?
++pub fn is_progress(text: &str) -> bool {
++    let trimmed = text.trim();
++    if trimmed.is_empty() {
++        return false;
++    }
++
++    if starts_with_progress_verb(trimmed) {
++        return true;
++    }
++    if is_percentage(trimmed) {
++        return true;
++    }
++    if is_bar(trimmed) {
++        return true;
++    }
++    if is_spinner(trimmed) {
++        return true;
++    }
++    false
++}
++
++/// `Compiling lens v0.1.0 (/path)`, `Downloading crates ...`
++fn starts_with_progress_verb(text: &str) -> bool {
++    PROGRESS_VERBS.iter().any(|verb| {
++        text.strip_prefix(verb).is_some_and(|rest| rest.starts_with(' ') && rest.len() > 1)
++    })
++}
++
++/// A line whose only claim is a percentage: ` 47%`, `47% done`, `[47%]`.
++///
++/// Requires the percentage to be most of the line. `error: 50% of tests failed`
++/// contains a percentage and is not progress.
++fn is_percentage(text: &str) -> bool {
++    let Some(index) = text.find('%') else { return false };
++    let before = &text[..index];
++
++    let digits_end = before.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
++    if digits_end.len() == before.len() {
++        return false; // no digits immediately before the %
++    }
++
++    // Everything that is not the number itself has to be decoration.
++    let leading = digits_end.trim();
++    let trailing = text[index + 1..].trim();
++    is_decoration(leading) && is_decoration(trailing)
++}
++
++/// A drawn bar: `[####----]`, `━━━━━━╾─────`, `=====>`.
++fn is_bar(text: &str) -> bool {
++    const BAR_CHARS: &[char] =
++        &['#', '=', '-', '━', '─', '╾', '█', '░', '▒', '▓', '>', '[', ']', '|', '.'];
++    let bar_like = text.chars().filter(|c| BAR_CHARS.contains(c)).count();
++    // A long run of drawing characters, and little else.
++    bar_like >= 8 && bar_like * 4 >= text.chars().count() * 3
++}
++
++/// A spinner frame, alone or leading a status word.
++fn is_spinner(text: &str) -> bool {
++    const SPINNERS: &[char] =
++        &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '◐', '◓', '◑', '◒'];
++    text.starts_with(SPINNERS)
++}
++
++/// Decoration around a number: brackets, arrows, and the words that pad them.
++fn is_decoration(text: &str) -> bool {
++    if text.is_empty() {
++        return true;
++    }
++    const WORDS: &[&str] = &["done", "complete", "completed", "of", "eta", "remaining"];
++    text.split_whitespace().all(|word| {
++        let stripped = word.trim_matches(|c: char| !c.is_alphanumeric());
++        stripped.is_empty()
++            || WORDS.contains(&stripped.to_ascii_lowercase().as_str())
++            || stripped.chars().all(|c| c.is_ascii_digit() || c == '.')
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::tests::doc_of;
++    use super::*;
++
++    #[test]
++    fn build_churn_is_progress() {
++        for line in [
++            "   Compiling lens v0.1.0 (/home/u/lens)",
++            "    Updating crates.io index",
++            " Downloading 42 crates",
++            "  Installing lens v0.1.0",
++        ] {
++            assert!(is_progress(line), "{line:?}");
++        }
++    }
++
++    #[test]
++    fn percentages_and_bars_are_progress() {
++        for line in [
++            " 47%",
++            "47% done",
++            "[ 12%]",
++            "100% complete",
++            "[####################----]",
++            "━━━━━━━━━━╾─────────────",
++            "⠋ building",
++        ] {
++            assert!(is_progress(line), "{line:?}");
++        }
++    }
++
++    #[test]
++    fn content_that_merely_contains_a_number_is_not_progress() {
++        // The failure that matters: dropping a line the reader needed because
++        // it happened to mention a percentage or a verb.
++        for line in [
++            "error: 50% of tests failed",
++            "warning: coverage dropped to 68%",
++            "Compiling",
++            "test result: ok. 74 passed",
++            "   Finished `release` profile [optimized] target(s) in 2.43s",
++            "assert_eq!(rate, 0.5) // 50% of the total",
++        ] {
++            assert!(!is_progress(line), "{line:?} must survive");
++        }
++    }
++
++    #[test]
++    fn an_empty_line_is_not_progress() {
++        assert!(!is_progress(""));
++        assert!(!is_progress("   "));
++    }
++
++    #[test]
++    fn a_dropped_block_says_how_much_went() {
++        let mut doc = doc_of(&["   Compiling a v1.0", "error: boom", " 42%"]);
++        Progress.apply(&mut doc, &Ctx::default());
++
++        assert!(!doc.blocks[0].kept());
++        assert_eq!(doc.blocks[0].class, Class::Progress);
++        assert_eq!(doc.blocks[0].elided.as_ref().unwrap().reason, "progress");
++        assert_eq!(doc.blocks[0].elided.as_ref().unwrap().lines_removed, 1);
++
++        assert!(doc.blocks[1].kept(), "the error survives");
++        assert!(!doc.blocks[2].kept());
++    }
++
++    #[test]
++    fn a_mixed_block_survives_whole() {
++        // A block is dropped only if all of it is progress. One real line in the
++        // block keeps the whole block, because splitting it would mean deciding
++        // where the reader's context ends.
++        let mut doc = Doc {
++            blocks: vec![super::super::Block::new(vec![
++                super::super::Line { text: "   Compiling a v1.0".into(), origin: 1 },
++                super::super::Line { text: "error: boom".into(), origin: 2 },
++            ])],
++            source: super::super::Stream::Stdout,
++        };
++        Progress.apply(&mut doc, &Ctx::default());
++        assert!(doc.blocks[0].kept());
++    }
++
++    #[test]
++    fn a_forced_block_is_not_dropped() {
++        let mut doc = doc_of(&["   Compiling a v1.0"]);
++        doc.blocks[0].force();
++        Progress.apply(&mut doc, &Ctx::default());
++        assert!(doc.blocks[0].kept());
++    }
++}
+diff --git a/src/render.rs b/src/render.rs
+new file mode 100644
+index 0000000..d0c846f
+--- /dev/null
++++ b/src/render.rs
+@@ -0,0 +1,355 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Turning a filtered document back into output.
++//!
++//! This is the only place anything is actually removed. Stages mark; the
++//! renderer subtracts, and because it subtracts it knows exactly how much went
++//! and can say so.
++//!
++//! The marker is the load-bearing part of the whole design. It is what tells a
++//! reader that the view is a view — that there is more, that it is still there,
++//! and how to ask for it. Phrasing matters: content is *outside the view*, never
++//! destroyed. A tool that quietly truncates is a tool nobody can trust with the
++//! output they did not read.
++
++use crate::pipeline::{Class, Doc};
++
++/// How much detail to render.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
++pub enum Level {
++    /// Counts and outcome only.
++    Summary,
++    /// One line per kept item: failures and the shape of the rest.
++    Items,
++    /// Everything the pipeline kept.
++    Detail,
++    /// The raw stream, byte for byte.
++    Raw,
++}
++
++impl Level {
++    /// Parse a numeric level, as `--level N` gives it.
++    pub fn from_number(n: u8) -> Option<Self> {
++        match n {
++            0 => Some(Level::Summary),
++            1 => Some(Level::Items),
++            2 => Some(Level::Detail),
++            3 => Some(Level::Raw),
++            _ => None,
++        }
++    }
++
++    /// The number this level is written as.
++    pub fn number(self) -> u8 {
++        match self {
++            Level::Summary => 0,
++            Level::Items => 1,
++            Level::Detail => 2,
++            Level::Raw => 3,
++        }
++    }
++}
++
++/// The default level.
++///
++/// Detail, until a budget exists to choose for itself. Picking the fullest
++/// filtered view means the first thing a reader loses is noise, not content.
++pub const DEFAULT_LEVEL: Level = Level::Detail;
++
++/// Render `doc` at `level`, announcing anything left out.
++///
++/// `handle` goes into every marker, because a marker that says content exists
++/// without saying how to reach it is only half an announcement.
++pub fn render(doc: &Doc, level: Level, handle: Option<&str>) -> String {
++    // A stream the command never wrote to has nothing to report, at any level.
++    // Announcing "0 lines" on stderr for a command that succeeded quietly is
++    // noise the caller then has to filter, which is the wrong way round.
++    if doc.blocks.is_empty() {
++        return String::new();
++    }
++
++    match level {
++        Level::Summary => summary(doc, handle),
++        Level::Items => body(doc, handle, true),
++        Level::Detail | Level::Raw => body(doc, handle, false),
++    }
++}
++
++/// Counts only: what happened, not what was said.
++fn summary(doc: &Doc, handle: Option<&str>) -> String {
++    let failures = doc.blocks.iter().filter(|b| is_failure(b.class)).count();
++    let warnings = doc.blocks.iter().filter(|b| b.class == Class::Warning).count();
++    let mut out = format!(
++        "{} lines · {failures} failing · {warnings} warning{}",
++        doc.line_count(),
++        if warnings == 1 { "" } else { "s" }
++    );
++
++    if doc.line_count() > 0 {
++        out.push('\n');
++        out.push_str(&marker(doc.line_count(), "level 0 shows counts only", handle, 1));
++        out.push('\n');
++    }
++    out
++}
++
++/// The kept blocks, with a marker wherever a run of them was left out.
++///
++/// Markers are placed inline rather than gathered at the end, so the reader
++/// learns *where* the gap is. A summary at the bottom says how much is missing;
++/// a marker in position says what it was between.
++fn body(doc: &Doc, handle: Option<&str>, failures_only: bool) -> String {
++    let mut out = String::new();
++    let mut pending_lines = 0usize;
++    let mut pending_blocks = 0usize;
++    let mut wrote_anything = false;
++
++    for block in &doc.blocks {
++        let show = block.kept() && !(failures_only && !is_failure(block.class));
++
++        if !show {
++            pending_lines += block.lines.len();
++            pending_blocks += 1;
++            continue;
++        }
++
++        if pending_lines > 0 {
++            out.push_str(&marker(pending_lines, "filtered", handle, pending_blocks));
++            out.push('\n');
++            pending_lines = 0;
++            pending_blocks = 0;
++        }
++
++        for line in &block.lines {
++            out.push_str(&line.text);
++            out.push('\n');
++        }
++        wrote_anything = true;
++    }
++
++    if pending_lines > 0 {
++        // Trailing elisions are announced too. A view that ends early without
++        // saying so is exactly the failure this tool exists to avoid.
++        out.push_str(&marker(pending_lines, "filtered", handle, pending_blocks));
++        out.push('\n');
++    }
++
++    if !wrote_anything && out.is_empty() && doc.line_count() > 0 {
++        out.push_str(&marker(
++            doc.line_count(),
++            "nothing matched this view",
++            handle,
++            doc.blocks.len(),
++        ));
++        out.push('\n');
++    }
++
++    out
++}
++
++/// A single elision marker.
++///
++/// One line, bracketed, prefixed `[lens:`. Anything that pipes filtered output
++/// into a parser fails loudly on this line rather than silently processing a
++/// truncated stream, which is the second reason it exists.
++fn marker(lines: usize, reason: &str, handle: Option<&str>, blocks: usize) -> String {
++    let what = if blocks > 1 {
++        format!("{lines} lines in {blocks} blocks outside this view")
++    } else {
++        format!("{lines} line{} outside this view", if lines == 1 { "" } else { "s" })
++    };
++
++    match handle {
++        Some(handle) => format!("[lens: {what} · {reason} · lens show {handle} --level 3]"),
++        None => format!("[lens: {what} · {reason}]"),
++    }
++}
++
++fn is_failure(class: Class) -> bool {
++    matches!(class, Class::Error | Class::Failure)
++}
++
++/// Does this output announce an elision?
++#[cfg(test)]
++pub fn has_marker(text: &str) -> bool {
++    text.lines().any(|line| line.trim_start().starts_with("[lens:"))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::pipeline::{Ctx, Stage, Stream, classify, default_stages, progress, run};
++
++    fn doc(text: &str) -> Doc {
++        crate::adapters::parse(text.as_bytes(), Stream::Stdout)
++    }
++
++    fn filtered(text: &str, exit_code: i32) -> Doc {
++        let mut d = doc(text);
++        let ctx = Ctx { exit_code, ..Ctx::default() };
++        run(&mut d, &default_stages(), &ctx);
++        d
++    }
++
++    #[test]
++    fn levels_parse_from_numbers() {
++        assert_eq!(Level::from_number(0), Some(Level::Summary));
++        assert_eq!(Level::from_number(3), Some(Level::Raw));
++        assert_eq!(Level::from_number(4), None);
++        for level in [Level::Summary, Level::Items, Level::Detail, Level::Raw] {
++            assert_eq!(Level::from_number(level.number()), Some(level));
++        }
++    }
++
++    #[test]
++    fn an_unfiltered_document_renders_unchanged_and_says_nothing() {
++        // No elision, so no marker. A marker on output that lost nothing would
++        // train readers to ignore markers.
++        let out = render(&doc("one\ntwo\nthree"), Level::Detail, Some("a3f19c2b"));
++        assert_eq!(out, "one\ntwo\nthree\n");
++        assert!(!has_marker(&out));
++    }
++
++    #[test]
++    fn anything_removed_is_announced() {
++        let d = filtered("   Compiling foo v1.0\n\nreal output\n", 0);
++        let out = render(&d, Level::Detail, Some("a3f19c2b"));
++        assert!(has_marker(&out), "{out}");
++        assert!(out.contains("real output"));
++    }
++
++    #[test]
++    fn a_marker_carries_the_handle_and_the_count() {
++        // Both halves of the announcement: that content exists, and how to get
++        // it. Either alone is useless.
++        let d = filtered("   Compiling a v1.0\n\n   Compiling b v1.0\n\nkept\n", 0);
++        let out = render(&d, Level::Detail, Some("a3f19c2b"));
++        let line = out.lines().find(|l| l.starts_with("[lens:")).expect("a marker");
++        assert!(line.contains("a3f19c2b"), "{line}");
++        assert!(line.contains("lens show"), "{line}");
++        assert!(line.contains('2'), "the line count: {line}");
++    }
++
++    #[test]
++    fn a_marker_is_phrased_as_content_outside_the_view() {
++        // The tool's central claim, in the one place a reader meets it.
++        let d = filtered("   Compiling foo v1.0\n\nkept\n", 0);
++        let out = render(&d, Level::Detail, Some("h"));
++        let line = out.lines().find(|l| l.starts_with("[lens:")).unwrap();
++        assert!(line.contains("outside this view"), "{line}");
++        for word in ["deleted", "removed", "truncated", "discarded"] {
++            assert!(!line.contains(word), "{line} suggests loss");
++        }
++    }
++
++    #[test]
++    fn markers_sit_where_the_gap_is() {
++        // Position is information: the reader learns what the missing content
++        // was between, not merely that some exists.
++        let d = filtered("first\n\n   Compiling foo v1.0\n\nlast\n", 0);
++        let out = render(&d, Level::Detail, Some("h"));
++        let lines: Vec<&str> = out.lines().collect();
++        let marker_at = lines.iter().position(|l| l.starts_with("[lens:")).unwrap();
++        let first_at = lines.iter().position(|l| *l == "first").unwrap();
++        let last_at = lines.iter().position(|l| *l == "last").unwrap();
++        assert!(first_at < marker_at && marker_at < last_at, "{out}");
++    }
++
++    #[test]
++    fn a_trailing_elision_is_announced() {
++        // The view ends early; saying nothing here is the exact failure the
++        // marker exists to prevent.
++        let d = filtered("kept\n\n   Compiling foo v1.0\n", 0);
++        let out = render(&d, Level::Detail, Some("h"));
++        assert!(out.trim_end().ends_with(']'), "{out}");
++    }
++
++    #[test]
++    fn the_summary_level_reports_counts() {
++        let d = filtered("error: boom\n\nwarning: hm\n\nfine\n", 1);
++        let out = render(&d, Level::Summary, Some("h"));
++        assert!(out.contains("1 failing"), "{out}");
++        assert!(out.contains("1 warning"), "{out}");
++        assert!(has_marker(&out), "a summary is the largest elision there is");
++    }
++
++    #[test]
++    fn the_items_level_keeps_failures_and_announces_the_rest() {
++        let d = filtered("setup\n\nerror: boom\n\nteardown\n", 1);
++        let out = render(&d, Level::Items, Some("h"));
++        assert!(out.contains("error: boom"));
++        assert!(!out.contains("teardown"));
++        assert!(has_marker(&out));
++    }
++
++    #[test]
++    fn a_view_with_nothing_in_it_still_announces() {
++        // Empty output where the command produced plenty would otherwise read
++        // as "the command said nothing".
++        let d = filtered("just some ordinary output\n", 0);
++        let out = render(&d, Level::Items, Some("h"));
++        assert!(has_marker(&out), "{out:?}");
++    }
++
++    #[test]
++    fn an_empty_stream_renders_empty_at_every_level() {
++        // A command that wrote nothing to stderr must not have stderr output
++        // invented for it — least of all a summary saying so.
++        for level in [Level::Summary, Level::Items, Level::Detail, Level::Raw] {
++            let out = render(&doc(""), level, Some("h"));
++            assert!(out.is_empty(), "level {} rendered {out:?}", level.number());
++        }
++    }
++
++    #[test]
++    fn a_marker_without_a_handle_still_announces() {
++        let d = filtered("   Compiling foo v1.0\n\nkept\n", 0);
++        let out = render(&d, Level::Detail, None);
++        assert!(has_marker(&out));
++        assert!(!out.contains("lens show"), "no handle, no instruction to follow");
++    }
++
++    #[test]
++    fn every_kept_line_appears_exactly_once() {
++        let d = filtered("alpha\n\nbeta\n\ngamma\n", 0);
++        let out = render(&d, Level::Detail, Some("h"));
++        for word in ["alpha", "beta", "gamma"] {
++            assert_eq!(out.matches(word).count(), 1, "{word} in {out}");
++        }
++    }
++
++    #[test]
++    fn a_failing_command_shows_its_failure_at_every_filtered_level() {
++        // The worst possible bug, checked at each level that claims to be a
++        // useful view of a run.
++        let text = "step one\n\nstep two\n\nerror: the thing broke\n";
++        let d = filtered(text, 1);
++        for level in [Level::Items, Level::Detail] {
++            let out = render(&d, level, Some("h"));
++            assert!(out.contains("the thing broke"), "level {}: {out}", level.number());
++        }
++    }
++
++    #[test]
++    fn a_failure_with_no_recognizable_error_still_surfaces() {
++        // Exit code 1, nothing that looks like an error: the floor forces the
++        // tail, and the renderer has to show it.
++        let text = "doing a thing\n\nand another\n\nthe last thing it said\n";
++        let d = filtered(text, 1);
++        let out = render(&d, Level::Detail, Some("h"));
++        assert!(out.contains("the last thing it said"), "{out}");
++    }
++
++    #[test]
++    fn progress_only_output_collapses_to_a_marker() {
++        let mut d = doc("   Compiling a v1.0\n\n   Compiling b v1.0\n\n   Compiling c v1.0\n");
++        let ctx = Ctx::default();
++        progress::Progress.apply(&mut d, &ctx);
++        classify::Classify.apply(&mut d, &ctx);
++
++        let out = render(&d, Level::Detail, Some("h"));
++        assert!(has_marker(&out));
++        assert!(!out.contains("Compiling"));
++    }
++}
+diff --git a/src/tokens.rs b/src/tokens.rs
+new file mode 100644
+index 0000000..2ba77d0
+--- /dev/null
++++ b/src/tokens.rs
+@@ -0,0 +1,136 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Token estimation.
++//!
++//! Budget decisions need a number, not a tokenizer. A BPE tokenizer would cost a
++//! dependency carrying model data, tens of milliseconds on a large input, and a
++//! coupling to whichever model is current — to answer a question where being
++//! within a few percent is indistinguishable from being exact.
++//!
++//! The trait stays so an exact implementation can be dropped in later, when
++//! something needs one.
++
++/// Estimates how many tokens a string will cost.
++pub trait TokenEstimator {
++    /// Tokens `text` is expected to occupy.
++    fn estimate(&self, text: &str) -> usize;
++}
++
++/// The default estimator: alphanumeric runs plus the punctuation that splits.
++///
++/// A BPE vocabulary merges letters into subwords but rarely merges a separator
++/// with its neighbour. So a run of letters or digits costs roughly its length
++/// over five, and each separator costs one on its own — which is why a path and
++/// a sentence of the same length are nowhere near the same price.
++#[derive(Debug, Clone, Copy, Default)]
++pub struct Heuristic;
++
++/// Characters a tokenizer almost always emits on their own.
++const SPLITTERS: &[char] = &[
++    '/', '\\', ':', ';', '|', '=', '<', '>', '{', '}', '[', ']', '(', ')', '#', '@', '$', '%', '^',
++    '&', '*', '+', '~', '`', '"',
++];
++
++/// Characters in a run before it costs another token.
++const RUN_PER_TOKEN: usize = 5;
++
++impl TokenEstimator for Heuristic {
++    fn estimate(&self, text: &str) -> usize {
++        let mut tokens = 0usize;
++        let mut run = 0usize;
++
++        for c in text.chars() {
++            if c.is_alphanumeric() {
++                run += 1;
++                continue;
++            }
++
++            tokens += run.div_ceil(RUN_PER_TOKEN);
++            run = 0;
++
++            if SPLITTERS.contains(&c) {
++                tokens += 1;
++            }
++            // Everything else — spaces, commas, full stops, hyphens — usually
++            // merges into a neighbouring token and costs nothing on its own.
++        }
++
++        tokens + run.div_ceil(RUN_PER_TOKEN)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// How far the estimate is from `actual`, as a fraction.
++    fn error(estimate: usize, actual: usize) -> f64 {
++        (estimate as f64 - actual as f64).abs() / actual as f64
++    }
++
++    #[test]
++    fn empty_text_costs_nothing() {
++        assert_eq!(Heuristic.estimate(""), 0);
++    }
++
++    #[test]
++    fn real_output_lands_within_fifteen_percent() {
++        // Counts on the right are what a BPE tokenizer reports for these
++        // strings. The target is 15%: closer than that is luck, further makes
++        // budget decisions unreliable.
++        let cases = [
++            ("The quick brown fox jumps over the lazy dog.", 10),
++            ("Compiling lens v0.1.0 (/home/user/projects/lens)", 17),
++            ("error[E0308]: mismatched types", 9),
++            ("test result: ok. 74 passed; 0 failed; 0 ignored", 16),
++            ("src/pipeline/mod.rs:142:9", 11),
++        ];
++        for (text, actual) in cases {
++            let estimate = Heuristic.estimate(text);
++            assert!(
++                error(estimate, actual) <= 0.15,
++                "{text:?}: estimated {estimate}, actual {actual}"
++            );
++        }
++    }
++
++    #[test]
++    fn a_path_costs_more_than_prose_of_the_same_length() {
++        // The case a byte count gets wrong: a path is mostly separators, and
++        // each one is its own token. Estimating it as prose would let a budget
++        // admit roughly twice the output it can afford.
++        let path = "src/pipeline/mod.rs:142:9";
++        let prose = "this is a sentence of abc";
++        assert_eq!(path.len(), prose.len(), "same length");
++        assert!(
++            Heuristic.estimate(path) > Heuristic.estimate(prose),
++            "path {} vs prose {}",
++            Heuristic.estimate(path),
++            Heuristic.estimate(prose)
++        );
++    }
++
++    #[test]
++    fn the_estimate_grows_with_the_text() {
++        // Budget decisions depend on this and nothing else: more text is never
++        // fewer tokens.
++        let mut previous = 0;
++        let mut text = String::new();
++        for _ in 0..50 {
++            text.push_str("a line of output\n");
++            let estimate = Heuristic.estimate(&text);
++            assert!(estimate >= previous, "estimate went backwards");
++            previous = estimate;
++        }
++    }
++
++    #[test]
++    fn a_long_input_stays_proportional() {
++        let unit = "warning: unused variable `x`\n";
++        let one = Heuristic.estimate(unit);
++        let hundred = Heuristic.estimate(&unit.repeat(100));
++        let ratio = hundred as f64 / one as f64;
++        assert!((90.0..=110.0).contains(&ratio), "100x the text estimated {ratio}x the tokens");
++    }
++}
+diff --git a/tests/fidelity.rs b/tests/fidelity.rs
+index 59e75a4..7ad888b 100644
+--- a/tests/fidelity.rs
++++ b/tests/fidelity.rs
+@@ -103,8 +103,9 @@ fn raw_mode_is_byte_identical_to_running_the_command_directly() {
+ 
+ #[test]
+ fn binary_output_survives_unchanged() {
+-    // Output is bytes, not text. A command emitting invalid UTF-8 must not have
+-    // it replaced with U+FFFD on the way through.
++    // Output is bytes, not text. A stream that is not valid UTF-8 is passed
++    // through unfiltered rather than mangled into replacement characters —
++    // filtering it would mean guessing what its bytes mean.
+     let script = r"printf '\001\002\377\000end'";
+     let filtered = lens(&["sh", "-c", script]);
+     let direct = bare(&["sh", "-c", script]);
+@@ -167,9 +168,15 @@ fn version_and_help_answer_without_running_anything() {
+ #[test]
+ fn large_interleaved_output_completes() {
+     // The deadlock this guards is a hang, so a failure here shows up as a test
+-    // that never finishes rather than one that fails.
+-    let out = lens(&["sh", "-c", "yes a | head -c 200000; yes b | head -c 200000 >&2"]);
++    // that never finishes rather than one that fails. Raw mode keeps it a test
++    // of the capture path: filtering would collapse 100,000 identical lines to
++    // one, which is correct and would hide what this is checking.
++    let out = Command::new(lens_bin())
++        .args(["sh", "-c", "yes a | head -c 200000; yes b | head -c 200000 >&2"])
++        .env("LENS_MODE", "raw")
++        .output()
++        .expect("run lens");
+     assert_eq!(out.stdout.len(), 200_000);
+     assert_eq!(out.stderr.len(), 200_000);
+-    assert_eq!(code(&out), 0);
++    assert_eq!(out.status.code(), Some(0));
+ }
+diff --git a/tests/filtering.rs b/tests/filtering.rs
+new file mode 100644
+index 0000000..cf13913
+--- /dev/null
++++ b/tests/filtering.rs
+@@ -0,0 +1,337 @@
++// Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++//! End-to-end checks on what the filtered view is allowed to be.
++//!
++//! Every test here runs the real binary against a real child, in a sandbox of
++//! its own. The properties are the ones that make the tool's claim true rather
++//! than merely plausible: a failing command always shows its failure, anything
++//! left out is announced, and the raw view is byte-identical to what the command
++//! produced.
++
++use std::fs;
++use std::path::PathBuf;
++use std::process::{Command, Output};
++
++struct Sandbox {
++    root: PathBuf,
++}
++
++impl Sandbox {
++    fn new(name: &str) -> Self {
++        let root = std::env::temp_dir().join(format!("lens-filter-{}-{name}", std::process::id()));
++        let _ = fs::remove_dir_all(&root);
++        fs::create_dir_all(root.join("store")).expect("create sandbox");
++        fs::create_dir_all(root.join("logs")).expect("create sandbox");
++        Sandbox { root }
++    }
++
++    fn lens(&self, args: &[&str]) -> Output {
++        self.lens_with(args, &[])
++    }
++
++    fn lens_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
++        let mut cmd = Command::new(lens_bin());
++        cmd.args(args)
++            .env("LENS_STORE", self.root.join("store"))
++            .env("LENS_LOG_DIR", self.root.join("logs"));
++        for (key, value) in env {
++            cmd.env(key, value);
++        }
++        cmd.output().expect("run lens")
++    }
++
++    /// Run a script through Lens and return the handle of the stored run.
++    fn run_script(&self, script: &str) -> (Output, String) {
++        let out = self.lens(&["sh", "-c", script]);
++        let text = fs::read_to_string(self.root.join("logs").join("lens.log")).unwrap_or_default();
++        let handle = text
++            .lines()
++            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
++            .rfind(|r| r["type"] == "run")
++            .and_then(|r| r["handle"].as_str().map(str::to_string))
++            .expect("a handle for the run");
++        (out, handle)
++    }
++}
++
++impl Drop for Sandbox {
++    fn drop(&mut self) {
++        let _ = fs::remove_dir_all(&self.root);
++    }
++}
++
++fn lens_bin() -> PathBuf {
++    let mut path = std::env::current_exe().expect("test binary path");
++    path.pop();
++    if path.ends_with("deps") {
++        path.pop();
++    }
++    path.join("lens")
++}
++
++fn text(bytes: &[u8]) -> String {
++    String::from_utf8_lossy(bytes).into_owned()
++}
++
++fn has_marker(out: &str) -> bool {
++    out.lines().any(|line| line.trim_start().starts_with("[lens:"))
++}
++
++/// Output with a great deal of churn and one line that matters.
++const NOISY: &str = r#"
++for i in $(seq 1 200); do echo "   Compiling crate_$i v1.0.0"; done
++echo "warning: unused variable"
++echo "warning: unused variable"
++echo "warning: unused variable"
++echo "the one line that matters"
++"#;
++
++#[test]
++fn a_failing_command_always_shows_its_failure() {
++    // The worst bug this tool can have: a filtered view of a failed command
++    // that reads as success. Checked across levels and across both streams.
++    let sandbox = Sandbox::new("failure-visible");
++
++    let out = sandbox.lens(&[
++        "sh",
++        "-c",
++        "for i in $(seq 1 100); do echo \"   Compiling c_$i v1.0\"; done; \
++         echo 'error[E0308]: mismatched types' >&2; exit 1",
++    ]);
++
++    assert_eq!(out.status.code(), Some(1));
++    let combined = format!("{}{}", text(&out.stdout), text(&out.stderr));
++    assert!(combined.contains("E0308"), "the failure vanished:\n{combined}");
++}
++
++#[test]
++fn a_failure_with_no_error_word_still_surfaces() {
++    // Exit code 3 and nothing that looks like an error anywhere. The floor has
++    // to rescue the tail, or the view says the command was fine.
++    let sandbox = Sandbox::new("silent-failure");
++    let out =
++        sandbox.lens(&["sh", "-c", "echo 'doing a thing'; echo 'the last thing it said'; exit 3"]);
++
++    assert_eq!(out.status.code(), Some(3));
++    assert!(text(&out.stdout).contains("the last thing it said"), "{}", text(&out.stdout));
++}
++
++#[test]
++fn the_last_line_of_a_long_output_is_not_lost() {
++    // The naive-truncation trap: everything before it is noise, and the line
++    // that matters is at the very end.
++    let sandbox = Sandbox::new("last-line");
++    let out = sandbox.lens(&["sh", "-c", NOISY]);
++    assert!(text(&out.stdout).contains("the one line that matters"), "{}", text(&out.stdout));
++}
++
++#[test]
++fn anything_left_out_is_announced() {
++    // The central promise. A view shorter than the raw stream that says nothing
++    // is indistinguishable from a command that produced less.
++    let sandbox = Sandbox::new("announced");
++    let (out, handle) = sandbox.run_script(NOISY);
++
++    let filtered = text(&out.stdout);
++    let raw = sandbox.lens(&["show", &handle, "--level", "3"]);
++    assert!(filtered.len() < text(&raw.stdout).len(), "the view should be shorter");
++    assert!(has_marker(&filtered), "and must say so:\n{filtered}");
++}
++
++#[test]
++fn a_marker_carries_a_handle_that_resolves() {
++    // Both halves of the announcement, checked end to end: the marker names a
++    // handle, and that handle produces the full output.
++    let sandbox = Sandbox::new("marker-handle");
++    let (out, _) = sandbox.run_script(NOISY);
++
++    let marker = text(&out.stdout)
++        .lines()
++        .find(|l| l.trim_start().starts_with("[lens:"))
++        .expect("a marker")
++        .to_string();
++
++    let handle = marker
++        .split_whitespace()
++        .find(|word| word.len() == 8 && word.bytes().all(|b| b.is_ascii_hexdigit()))
++        .expect("a handle in the marker");
++
++    let raw = sandbox.lens(&["show", handle, "--level", "3"]);
++    assert_eq!(raw.status.code(), Some(0));
++    assert!(text(&raw.stdout).contains("Compiling crate_200"), "the handle resolves to everything");
++}
++
++#[test]
++fn the_raw_view_is_byte_identical_to_the_command() {
++    // What makes the store's promise checkable, and the reason level 3 does not
++    // go through the pipeline at all.
++    let sandbox = Sandbox::new("raw-identical");
++    let script = "printf 'a\\n\\nb\\n'; printf '\\001\\377 binary\\n'";
++    let (_, handle) = sandbox.run_script(script);
++
++    let raw = sandbox.lens(&["show", &handle, "--level", "3"]);
++    let direct = Command::new("sh").args(["-c", script]).output().expect("run directly");
++    assert_eq!(raw.stdout, direct.stdout);
++}
++
++#[test]
++fn output_that_needs_no_filtering_is_unchanged() {
++    // Filtering is a service, not a tax. Output with nothing to remove comes
++    // back exactly as written, with no marker to teach readers to ignore.
++    let sandbox = Sandbox::new("untouched");
++    let out = sandbox.lens(&["sh", "-c", "printf 'one\\ntwo\\nthree\\n'"]);
++    assert_eq!(text(&out.stdout), "one\ntwo\nthree\n");
++    assert!(!has_marker(&text(&out.stdout)));
++}
++
++#[test]
++fn file_line_references_still_resolve_after_filtering() {
++    // Line addressability: a `file:line` in the view has to mean the same line
++    // it meant in the raw stream. Nothing renumbers, so the reference survives
++    // verbatim alongside the source excerpt it points at.
++    let sandbox = Sandbox::new("addressability");
++    let out = sandbox.lens(&[
++        "sh",
++        "-c",
++        "for i in $(seq 1 50); do echo \"   Compiling c_$i v1.0\"; done; \
++         printf 'error[E0308]: mismatched types\\n  --> src/main.rs:42:9\\n   |\\n42 |     let x: u8 = 1;\\n' >&2; \
++         exit 1",
++    ]);
++
++    let err = text(&out.stderr);
++    assert!(err.contains("src/main.rs:42:9"), "{err}");
++    assert!(err.contains("42 |     let x: u8 = 1;"), "the excerpt stays with its message: {err}");
++}
++
++#[test]
++fn the_filtered_levels_narrow() {
++    // Levels 1 and 2 are subsets of the raw stream and of each other, so asking
++    // for less detail means less output.
++    //
++    // Level 0 is deliberately excluded: it is a different shape rather than a
++    // smaller subset — counts instead of content — and on output with nothing
++    // worth showing, a two-line summary is legitimately longer than level 1's
++    // single marker. It is still bounded by the raw view, which is asserted
++    // separately below.
++    let sandbox = Sandbox::new("levels");
++    let (_, handle) = sandbox.run_script(NOISY);
++
++    let size = |level: &str| sandbox.lens(&["show", &handle, "--level", level]).stdout.len();
++
++    assert!(size("2") <= size("3"), "level 2 showed more than raw");
++    assert!(size("1") <= size("2"), "level 1 showed more than level 2");
++    assert!(size("0") <= size("3"), "level 0 showed more than raw");
++}
++
++#[test]
++fn a_stream_the_command_never_wrote_to_stays_empty() {
++    // Rendering "0 lines · 0 failing" onto stderr for a command that succeeded
++    // quietly would be output the caller has to filter, which is backwards.
++    let sandbox = Sandbox::new("empty-stderr");
++    let (_, handle) = sandbox.run_script("echo only-stdout");
++    for level in ["0", "1", "2", "3"] {
++        let out = sandbox.lens(&["show", &handle, "--level", level]);
++        assert!(out.stderr.is_empty(), "level {level} invented stderr: {:?}", text(&out.stderr));
++    }
++}
++
++#[test]
++fn every_filtered_level_announces_what_it_left_out() {
++    let sandbox = Sandbox::new("levels-announce");
++    let (_, handle) = sandbox.run_script(NOISY);
++
++    for level in ["0", "1", "2"] {
++        let out = sandbox.lens(&["show", &handle, "--level", level]);
++        assert!(has_marker(&text(&out.stdout)), "level {level} said nothing about the rest");
++    }
++}
++
++#[test]
++fn show_reports_the_stored_runs_exit_code_at_every_level() {
++    let sandbox = Sandbox::new("show-exit");
++    let (_, handle) = sandbox.run_script("echo out; exit 7");
++    for level in ["0", "1", "2", "3"] {
++        let out = sandbox.lens(&["show", &handle, "--level", level]);
++        assert_eq!(out.status.code(), Some(7), "level {level}");
++    }
++}
++
++#[test]
++fn an_unknown_level_is_refused() {
++    let sandbox = Sandbox::new("bad-level");
++    let (_, handle) = sandbox.run_script("echo x");
++    let out = sandbox.lens(&["show", &handle, "--level", "9"]);
++    assert_ne!(out.status.code(), Some(0));
++    assert!(text(&out.stderr).contains("--level"));
++}
++
++#[test]
++fn raw_mode_bypasses_filtering_entirely() {
++    let sandbox = Sandbox::new("raw-mode");
++    let script = "for i in $(seq 1 50); do echo \"   Compiling c_$i v1.0\"; done";
++    let out = sandbox.lens_with(&["sh", "-c", script], &[("LENS_MODE", "raw")]);
++    let direct = Command::new("sh").args(["-c", script]).output().expect("run directly");
++    assert_eq!(out.stdout, direct.stdout);
++    assert!(!has_marker(&text(&out.stdout)));
++}
++
++#[test]
++fn the_run_record_reports_what_filtering_did() {
++    // `lens stats` reduction comes from these, so they have to describe the
++    // view the caller received rather than what was captured.
++    let sandbox = Sandbox::new("record-counts");
++    sandbox.run_script(NOISY);
++
++    let log = fs::read_to_string(sandbox.root.join("logs").join("lens.log")).unwrap();
++    let record: serde_json::Value = log
++        .lines()
++        .filter_map(|l| serde_json::from_str(l).ok())
++        .find(|r: &serde_json::Value| r["type"] == "run")
++        .expect("a run record");
++
++    let in_lines = record["in_lines"].as_u64().expect("in_lines");
++    let out_lines = record["out_lines"].as_u64().expect("out_lines");
++    assert!(out_lines < in_lines, "{out_lines} of {in_lines} lines kept");
++    assert!(record["in_tok"].as_u64().unwrap() > record["out_tok"].as_u64().unwrap());
++    assert_eq!(record["level"], 2);
++    assert_eq!(record["stages"][0], "ansi");
++}
++
++#[test]
++fn stats_reports_reduction_in_output_tokens() {
++    let sandbox = Sandbox::new("stats-reduction");
++    sandbox.run_script(NOISY);
++
++    let out = sandbox.lens(&["stats"]);
++    let report = text(&out.stdout);
++    assert!(report.contains("reduction"), "{report}");
++    // Labelled as output tokens, never as a bill: prompt caching and extra
++    // turns both break that inference.
++    assert!(report.contains("output tokens only"), "{report}");
++}
++
++#[test]
++fn ansi_escapes_do_not_reach_the_view() {
++    let sandbox = Sandbox::new("ansi");
++    let out = sandbox.lens(&["sh", "-c", "printf '\\033[31merror: red\\033[0m\\n'; exit 1"]);
++    assert!(text(&out.stdout).contains("error: red"));
++    assert!(!text(&out.stdout).contains('\u{1b}'), "an escape survived");
++}
++
++#[test]
++fn repeated_lines_collapse_with_a_count() {
++    let sandbox = Sandbox::new("dedupe");
++    let out = sandbox.lens(&["sh", "-c", "for i in $(seq 1 50); do echo 'warning: same'; done"]);
++    let view = text(&out.stdout);
++    assert_eq!(view.matches("warning: same").count(), 1, "{view}");
++    assert!(view.contains("×50"), "the count is what replaces the copies: {view}");
++}
++
++#[test]
++fn empty_output_stays_empty() {
++    let sandbox = Sandbox::new("empty");
++    let out = sandbox.lens(&["sh", "-c", "true"]);
++    assert!(out.stdout.is_empty());
++    assert!(out.stderr.is_empty());
++}
+diff --git a/tests/store_and_log.rs b/tests/store_and_log.rs
+index 3988685..5b91ee7 100644
+--- a/tests/store_and_log.rs
++++ b/tests/store_and_log.rs
+@@ -386,14 +386,14 @@ fn show_says_so_when_a_run_is_not_there() {
+ }
+ 
+ #[test]
+-fn show_does_not_pretend_to_support_levels_yet() {
+-    // Silently ignoring --level would mean claiming a focused view and handing
+-    // back the raw one.
++fn show_level_three_is_the_stored_bytes() {
++    // The store's promise, checked at the level that claims to be raw: no
++    // parse, no re-render, the bytes as the command wrote them.
+     let sandbox = Sandbox::new("show-level");
+-    sandbox.lens(&["sh", "-c", "echo x"]);
++    sandbox.lens(&["sh", "-c", "printf 'x\ny\n'"]);
+     let handle = sandbox.run_records()[0]["handle"].as_str().unwrap().to_string();
+ 
+-    let out = sandbox.lens(&["show", &handle, "--level", "1"]);
+-    assert_ne!(out.status.code(), Some(0));
+-    assert!(String::from_utf8_lossy(&out.stderr).contains("not implemented yet"));
++    let out = sandbox.lens(&["show", &handle, "--level", "3"]);
++    assert_eq!(out.status.code(), Some(0));
++    assert_eq!(out.stdout, b"x\ny\n");
+ }

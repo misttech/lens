@@ -23,6 +23,24 @@ serde_json = "1"
 # quietly changing type.
 serde_json = "1"
 
+# The library and binary have no #[bench] functions, and cargo would otherwise
+# run their test harnesses in bench mode — where they reject this benchmark's
+# own flags and report "0 measured", which reads like a benchmark that found
+# nothing rather than one that was never asked to run.
+[lib]
+bench = false
+
+[[bin]]
+name = "lens"
+bench = false
+
+[[bench]]
+name = "pipeline"
+# No harness: this is a program that measures and gates, not a set of #[bench]
+# functions. criterion would be a large tree for arithmetic that fits on a
+# screen, and the gate needs to decide its own exit code.
+harness = false
+
 [profile.release]
 # The whole tool has a ~10ms wall budget, and it is a single short-lived
 # process: optimize for its own startup and throughput, not for build time.
