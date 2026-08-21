@@ -1,7 +1,7 @@
 # Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Benchmarks. Two kinds, and they are not interchangeable (LENS.md §13).
+# Benchmarks. Two kinds, and they are not interchangeable.
 # Included by the top-level Makefile; needs build/cargo.mk for CARGO.
 #
 #   make bench      micro-benchmarks: per-stage latency and throughput against

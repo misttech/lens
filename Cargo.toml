@@ -6,27 +6,25 @@ license = "Apache-2.0"
 repository = "https://github.com/misttech/lens"
 description = "Run a command, keep its full output, show an agent the view worth spending context on"
 
-# Keep the dependency tree small. LENS.md §2 approves regex, serde + toml, and
-# anyhow; serde_json rides along because `lens stats` has to parse JSONL and
-# `lens show` has to parse meta.json. Anything else needs a written
-# justification in the commit that adds it.
+# Keep the dependency tree small. Approved: regex, serde + toml, anyhow, and
+# serde_json. Anything else needs a written justification in the commit that
+# adds it.
 [dependencies]
-# JSON for the run store's meta.json and the command log's JSONL records. §12
-# prefers a hand-written serializer for a fixed schema, and for the write side
-# that would be fine — but `lens stats` has to parse the log back and `lens
-# show` has to parse meta.json, and a hand-rolled *parser* is a larger
-# liability than the dependency is.
+# JSON for the run store's meta.json and the command log's JSONL records. A
+# hand-written serializer would do for the write side, but `lens stats` has to
+# parse the log back and `lens show` has to parse meta.json, and a hand-rolled
+# *parser* is a larger liability than the dependency is.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
 # The integration tests assert on the log's JSON shape, which is a published
-# contract (§12) — reading it as text and grepping would not catch a field
+# contract — reading it as text and grepping would not catch a field
 # quietly changing type.
 serde_json = "1"
 
 [profile.release]
-# The whole tool has a ~10ms wall budget (§13.1), and it is a single short-lived
+# The whole tool has a ~10ms wall budget, and it is a single short-lived
 # process: optimize for its own startup and throughput, not for build time.
 opt-level = 3
 lto = "thin"

@@ -87,7 +87,7 @@ fn read(path: &Path) -> Vec<u8> {
 
 #[test]
 fn a_captured_run_is_stored_byte_for_byte() {
-    // Invariant 5: nothing is permanently lost. The store is what makes that
+    // Nothing is permanently lost. The store is what makes that
     // true, so what lands in it has to be exactly what the command produced.
     let sandbox = Sandbox::new("stored");
     let out = sandbox.lens(&["sh", "-c", "printf 'one\\ntwo\\n'; printf 'bad\\n' >&2; exit 2"]);
@@ -139,7 +139,7 @@ fn different_output_is_a_different_run() {
 
 #[test]
 fn every_invocation_is_recorded_including_passthrough() {
-    // §12: a passthrough record carrying its reason is exactly what answers
+    // A passthrough record carrying its reason is exactly what answers
     // "filtering didn't work" — so it must exist, and it must say why.
     let sandbox = Sandbox::new("recorded");
     sandbox.lens(&["sh", "-c", "echo captured"]);
@@ -190,7 +190,7 @@ fn the_run_record_carries_the_handle_of_its_stored_run() {
 
 #[test]
 fn an_unwritable_log_does_not_fail_the_command() {
-    // Invariant 10. The command is the product; the log is bookkeeping.
+    // The command is the product; the log is bookkeeping.
     let sandbox = Sandbox::new("unwritable-log");
     let out = sandbox
         .lens_with(&["sh", "-c", "echo fine"], &[("LENS_LOG_DIR", "/proc/nope/not/writable")]);
@@ -215,7 +215,7 @@ fn an_unwritable_store_does_not_fail_the_command() {
 
 #[test]
 fn logging_never_touches_the_childs_streams() {
-    // Invariant 9. Debug logging is on and the log still contributes nothing to
+    // Debug logging is on and the log still contributes nothing to
     // what the caller reads.
     let sandbox = Sandbox::new("stream-purity");
     let out = sandbox.lens_with(&["sh", "-c", "echo only-this"], &[("LENS_LOG", "trace")]);
@@ -226,7 +226,7 @@ fn logging_never_touches_the_childs_streams() {
 
 #[test]
 fn the_log_never_carries_command_output() {
-    // §12: command output can contain secrets, and the log is not the store.
+    // Command output can contain secrets, and the log is not the store.
     //
     // The secret is constructed by the command rather than written in it, so
     // that finding it in the log means output leaked — argv is logged on

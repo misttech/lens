@@ -32,7 +32,7 @@ make check test
 
 ## Invariants
 
-<!-- LENS.md §2. Tick what this change touches; delete the rest. -->
+<!-- See AGENTS.md. Tick what this change touches; delete the rest. -->
 
 - [ ] **Exit code fidelity** — the child's code is propagated unchanged.
 - [ ] **Stream separation** — stdout and stderr are never merged.

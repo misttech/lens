@@ -9,7 +9,7 @@
 //! reach the child byte-for-byte, including tokens that look like flags we
 //! recognize.
 //!
-//! The rule (`LENS.md` §3): **everything after the first non-flag token belongs
+//! The rule: **everything after the first non-flag token belongs
 //! to the child.** That token is either one of our subcommands or the name of a
 //! command to run. Nothing after it is interpreted.
 
@@ -36,7 +36,7 @@ pub enum Invocation {
     Help,
 }
 
-/// Lens's own subcommands (`LENS.md` §3).
+/// Lens's own subcommands.
 ///
 /// A token matching one of these is never treated as a command to run, so
 /// `lens show` cannot execute a binary named `show`. That collision is accepted

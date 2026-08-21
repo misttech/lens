@@ -14,10 +14,9 @@ Where this document is silent, they apply. Where it is not, it wins.
 * Getters are `handle()`, not `get_handle()` — `C-GETTER`.
 * Iterator methods are `iter`, `iter_mut`, `into_iter`, and the types they return
   are named after them — `C-ITER`, `C-ITER-TY`.
-* Word order is consistent across the crate — `C-WORD-ORDER`. In this tree the
-  vocabulary is fixed by `LENS.md` §Vocabulary: lens, view, handle, elision,
-  focus. Use those words in code, config, docs and error messages, and do not
-  introduce synonyms for them.
+* Word order is consistent across the crate — `C-WORD-ORDER`. This tree has a
+  fixed vocabulary: lens, view, handle, elision, focus. Use those words in
+  code, config, docs and error messages, and do not introduce synonyms.
 
 ## Types and traits
 
@@ -26,9 +25,8 @@ Where this document is silent, they apply. Where it is not, it wins.
   `C-COMMON-TRAITS`. A type that cannot be printed cannot be debugged from a log.
 * Conversions go through `From`, `AsRef`, `AsMut` — `C-CONV-TRAITS`.
 * Error types are meaningful and well behaved — `C-GOOD-ERR`. An error that
-  reaches the user says what Lens was doing and what it will do about it, because
-  invariant 6 means the answer is almost always "emit raw output and exit with the
-  child's code".
+  reaches the user says what Lens was doing and what it will do about it, which
+  is almost always "emit raw output and exit with the child's code".
 
 ## Unsafe
 
@@ -63,17 +61,17 @@ time with `static_assert!`, not documented in prose and not left to a test.
 ## Tests
 
 Every module ships `#[cfg(test)] mod tests` in the same file, covering that
-module's own logic. Integration and property tests live in `tests/`. See
-`LENS.md` §16 for what the property tests must assert — those are the checks that
-make the tool's central claim true rather than merely plausible.
+module's own logic. Integration and property tests live in `tests/`. The
+property tests assert the invariants listed in `AGENTS.md`, which are what make
+the tool's central claim true rather than merely plausible.
 
 Tests never touch the real cache, config or log directories: isolate through
 `LENS_STORE`, `LENS_LOG_DIR` and `LENS_CONFIG` pointed at a temp dir.
 
 ## Dependencies
 
-`LENS.md` §2 approves `regex`, `serde` + `toml`, and `anyhow`, plus `serde_json`
-for the JSONL the log and store need. Everything else needs a justification in
-the commit that adds it: what it buys, what it costs in tree size, and what was
-rejected instead. Explicitly unwanted: async runtimes, `clap`, tokenizer crates
-with model data, plugin runtimes, and the `tracing`/`log` subscriber stack.
+Approved: `regex`, `serde` + `toml`, `anyhow`, and `serde_json` for the JSONL
+the log and store need. Everything else needs a justification in the commit that
+adds it: what it buys, what it costs in tree size, and what was rejected
+instead. Explicitly unwanted: async runtimes, `clap`, tokenizer crates with
+model data, plugin runtimes, and the `tracing`/`log` subscriber stack.

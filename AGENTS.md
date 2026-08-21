@@ -1,11 +1,7 @@
 # Development notes
 
-`LENS.md` is the spec: what Lens does and why. It is deliberately kept out of
-this repository, so the section and invariant numbers cited here and in the
-source comments refer to that document rather than to anything in the tree.
-
-This file says how the code is built, and records decisions that are not
-visible in the code itself.
+How the code is built, and the decisions that are not visible in the code
+itself.
 
 ## Working rules
 
@@ -23,6 +19,34 @@ visible in the code itself.
   disabled. Every commit lands individually, so every commit builds, passes
   tests, and carries a message worth keeping. See
   `docs/contribute/commit-message-style-guide.md`.
+
+## Invariants
+
+Correctness properties, not tradeoffs. Violating one is a bug, and a change that
+touches one names it in the commit body.
+
+1. **Explicit invocation.** Lens filters only when invoked as `lens <cmd>`. No
+   PATH symlinks, no environment that makes nested processes filter.
+2. **Exit code fidelity.** The child's code is propagated unchanged; a signal
+   death becomes `128 + signum`.
+3. **Stream separation.** stdout and stderr are captured and emitted separately,
+   never merged.
+4. **Elision is announced.** If content was removed, the output says so in a
+   machine-readable marker. Configuration decides what is removed, never whether
+   the caller is told.
+5. **Nothing is unrecoverable.** Full output reaches the store and stays
+   retrievable by handle. A lens changes the view, never the subject.
+6. **Passthrough on doubt.** An unknown command, unparseable output, or any
+   internal error means emit raw and exit with the child's code. Lens failing
+   must never break the user's command.
+7. **No model in the default path.** Filtering is deterministic: parsers, regex,
+   heuristics, ranking. No network calls.
+8. **Line addressability.** `file:line` references stay correct. Never renumber;
+   elide whole regions with a marker instead.
+9. **Logging stays off the child's streams.** Diagnostics go to the log file, or
+   to stderr only after the child's output has flushed.
+10. **Logging never fails the run.** A full disk or an unwritable log directory
+    is swallowed and the command still succeeds.
 
 ## Build
 
@@ -70,7 +94,7 @@ Lens no longer present. Spawning and copying streams is an imitation.
 **Capture reads each stream on its own thread.** One reader deadlocks as soon as
 the unread pipe fills. This is also why there is no async runtime.
 
-**stdout is emitted in full, then stderr.** Invariant 3 forbids merging them, so
+**stdout is emitted in full, then stderr.** They are never merged, so
 interleaving relative to a terminal run is lost. The gain is that stages can tell
 which stream a line came from, which is what lets a failing command's stderr be
 force-kept.
@@ -98,10 +122,10 @@ is no outcome to report. A placeholder would put fabricated exit codes into
 without argv, so a secret passed in an argument does reach the log. Output never
 does below `trace`, where it is capped at a short prefix.
 
-**A lens flag after the command name reaches the child.** `LENS.md` §3 reads as
-rejecting it, but `lens mytool --budget 3` is a valid command line for `mytool`,
-and Lens does not reinterpret a command it was asked to run. An unknown flag
-*before* the command is an error rather than something to execute.
+**A lens flag after the command name reaches the child.** `lens mytool --budget
+3` is a valid command line for `mytool`, and Lens does not reinterpret a command
+it was asked to run. An unknown flag *before* the command is an error rather
+than something to execute.
 
 **Interactive detection reads the git subcommand, not just the flag.** `git add
 -p` prompts per hunk; `git log -p` is output. Bare `python` is a session;
@@ -113,5 +137,5 @@ user's terminal, so a doubtful case passes through.
 Tests never touch real cache, config or log directories — isolate through
 `LENS_STORE`, `LENS_LOG_DIR` and `LENS_CONFIG` pointed at a temp dir.
 
-`LENS.md` §16 lists the property tests. Those are the checks that make the tool's
-central claim true rather than merely plausible, and they gate CI.
+The property tests assert the invariants above. Those are the checks that make
+the tool's central claim true rather than merely plausible, and they gate CI.
