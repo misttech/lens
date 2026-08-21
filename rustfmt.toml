@@ -12,4 +12,6 @@ use_small_heuristics = "Max"
 # Prevent carriage returns
 newline_style = "Unix"
 
+# Format imports. Nightly-only, which is why `make fmt` runs cargo +nightly
+# while every other cargo invocation stays on the pinned stable toolchain.
 imports_granularity = "Module"

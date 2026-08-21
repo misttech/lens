@@ -1,0 +1,22 @@
+[package]
+name = "lens"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/misttech/lens"
+description = "Run a command, keep its full output, show an agent the view worth spending context on"
+
+# Keep the dependency tree small. LENS.md §2 approves regex, serde + toml, and
+# anyhow; serde_json rides along because `lens stats` has to parse JSONL and
+# `lens show` has to parse meta.json. Anything else needs a written
+# justification in the commit that adds it.
+[dependencies]
+
+[profile.release]
+# The whole tool has a ~10ms wall budget (§13.1), and it is a single short-lived
+# process: optimize for its own startup and throughput, not for build time.
+opt-level = 3
+lto = "thin"
+panic = "abort"
+strip = true
+
