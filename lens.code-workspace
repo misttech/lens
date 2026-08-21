@@ -1,9 +1,11 @@
 {
-  // This is a checked-in VSCode workspace configuration file.
+  // This is a checked-in VSCode workspace configuration file that can be used
+  // instead of directly opening the lens checkout in VSCode.
   //
   // It's an opt-in workspace configuration that contains settings for:
   //  - vscode itself
-  //  - working with the lens checkout and its milestone worktrees
+  //  - LSP settings for working correctly with the lens.git checkout
+  //  - etc.
   //
   // In terms of precedence, VSCode uses the following order in which settings
   // are applied (merged together).
@@ -14,8 +16,10 @@
   //  3) workspace settings  (this file)
   //  4) workspace folder settings
   //
+  //
   // For details, see:
   // https://code.visualstudio.com/docs/getstarted/settings#_settings-precedence
+
 
   ////////
   // VSCode Workspace Contents
@@ -42,16 +46,30 @@
   //
   "extensions": {
     "recommendations": [
-      "EditorConfig.EditorConfig",
+      // The official LSP for Rust, rust-analyzer.
       "rust-lang.rust-analyzer",
+
+      // EditorConfig, matching .editorconfig in the tree.
+      "EditorConfig.EditorConfig",
+
+      // Cargo.toml / rustfmt.toml / mise.toml.
       "tamasfe.even-better-toml",
-      "yzhang.markdown-all-in-one",
+
+      // The Python extensions.
       "ms-python.python",
-      "charliermarsh.ruff"
+      "charliermarsh.ruff",
+
+      // Markdown, matching how the docs in this tree are wrapped.
+      "yzhang.markdown-all-in-one",
     ],
 
-    "unwantedRecommendations": []
+    "unwantedRecommendations": [
+      // Conflicts with ruff, which is the formatter and linter this repo uses.
+      "ms-python.black-formatter",
+      "ms-python.isort",
+    ]
   },
+
 
   "settings": {
     ////////
@@ -61,7 +79,9 @@
     },
 
     // Matches the default Mist code style.
-    "editor.rulers": [100],
+    "editor.rulers": [
+        100
+    ],
 
     // Disable graph visualization of incoming/outgoing changes.
     "scm.showHistoryGraph": false,
@@ -69,36 +89,54 @@
     ////////
     // Rust
     //
+
+    // This works around an OOM issue with the vscode extension-host's
+    // implementation of file-watching.
+    // see:  https://github.com/rust-lang/rust-analyzer/issues/12572
+    // see:  https://github.com/microsoft/vscode/issues/153154
+    "rust-analyzer.files.watcher": "server",
+
     // rust-analyzer must write where the Makefile writes, or a check-on-save
     // race deadlocks against a `make build` on the cargo lock — and its
     // artifacts end up outside out/, which is the only directory this repo
     // builds into.
-    //
-    // rustfmt.toml uses imports_granularity, which is nightly-only, so format
-    // on save needs the nightly toolchain the Makefile's fmt target uses.
     "rust-analyzer.cargo.targetDir": "out/.cargo/analyzer",
+
+    // Use clippy.
     "rust-analyzer.check.command": "clippy",
-    "rust-analyzer.rustfmt.extraArgs": ["+nightly"],
+
+    // Use nightly rustfmt: rustfmt.toml sets imports_granularity, which is
+    // nightly-only, and `make fmt` runs cargo +nightly for the same reason.
+    "rust-analyzer.rustfmt.overrideCommand": [
+      "rustup",
+      "run",
+      "nightly",
+      "rustfmt",
+      "--config-path=${workspaceFolder}/rustfmt.toml"
+    ],
+
     "[rust]": {
       "editor.defaultFormatter": "rust-lang.rust-analyzer",
       "editor.formatOnSave": true
     },
 
     ////////
-    // Markdown
-    //
-    "[markdown]": {
-      // Matches how the docs in this tree are wrapped.
-      "editor.rulers": [80]
-    },
-
-    ////////
-    // Python — repository tooling is ruff-formatted, per ruff.toml.
+    // Python
     //
     "[python]": {
       "editor.defaultFormatter": "charliermarsh.ruff",
       "editor.formatOnSave": true,
       "editor.rulers": [88]
+    },
+
+    ////////
+    // Markdown
+    //
+    "[markdown]": {
+        // Matches how the docs in this tree are wrapped.
+        "editor.rulers": [
+            80
+        ]
     },
 
     ////////
@@ -109,7 +147,7 @@
     "files.exclude": {
       "**/.DS_Store": true,
       "**/.git": true,
-      "**/__pycache__": true
+      "**/__pycache__": true,
     },
     "explorer.excludeGitIgnore": false,
 
@@ -120,13 +158,18 @@
       "**/.git": true,
       "**/__pycache__": true,
       "out/**": true,
-      "**/.venv/**": true
+      "target/**": true,
+      "**/.venv/**": true,
     },
 
-    // Files excluded from search results.
+    // Files that are excluded from search and quick open (^P).
     "search.exclude": {
       "out/**": true,
-      "**/.venv/**": true
-    }
+      "target/**": true,
+      "**/.venv/**": true,
+    },
+    "search.useIgnoreFiles": true,
+    // Don't follow symlinks (into other parts of the tree)
+    "search.followSymlinks": false,
   }
 }
