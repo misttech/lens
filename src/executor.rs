@@ -22,6 +22,7 @@ use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Everything a completed child produced.
 #[derive(Debug, Clone)]
@@ -32,6 +33,8 @@ pub struct Captured {
     pub stderr: Vec<u8>,
     /// The code Lens should exit with (`128 + signum` for a signal death).
     pub exit_code: i32,
+    /// Wall time the child took. Lens's own overhead is measured separately.
+    pub duration: Duration,
 }
 
 /// Run `argv` with `program` as the resolved binary, capturing both streams.
@@ -55,6 +58,7 @@ pub fn capture(program: &std::path::Path, argv: &[String]) -> std::io::Result<Ca
 
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
+    let started = Instant::now();
     let mut child = cmd.spawn()?;
 
     // Both pipes must be drained concurrently. A child that fills the stderr
@@ -81,7 +85,12 @@ pub fn capture(program: &std::path::Path, argv: &[String]) -> std::io::Result<Ca
     let stdout = stdout_reader.join().unwrap_or_default();
     let stderr = stderr_reader.join().unwrap_or_default();
 
-    Ok(Captured { stdout, stderr, exit_code: crate::platform::exit_code_for_status(&status) })
+    Ok(Captured {
+        stdout,
+        stderr,
+        exit_code: crate::platform::exit_code_for_status(&status),
+        duration: started.elapsed(),
+    })
 }
 
 /// The arguments after the command name, with any Lens-required additions.
@@ -211,6 +220,13 @@ mod tests {
     fn other_commands_are_not_rewritten() {
         assert_eq!(child_args(&argv(&["cargo", "test"])), vec!["test".to_string()]);
         assert_eq!(child_args(&argv(&["ls"])), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_child_is_timed() {
+        // The duration lands in the run record and in meta.json, where it is
+        // the child's time, not Lens's overhead.
+        assert!(sh("exit 0").duration.as_nanos() > 0);
     }
 
     #[test]
