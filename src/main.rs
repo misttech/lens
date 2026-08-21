@@ -133,10 +133,9 @@ fn run(argv: &[String]) -> ExitCode {
 
                 let logger = env.logger();
                 if handle.is_none() {
-                    // Invariant 5 is about not losing output, and a store that
-                    // could not be written has lost the ability to re-derive
-                    // this run. That is worth a warning, and worth nothing more:
-                    // the command still succeeds and its output still lands.
+                    // A store that could not be written has lost the ability to
+                    // re-derive this run. That is worth a warning and nothing
+                    // more: the command still succeeds and its output lands.
                     logger.event(Level::Warn, "store write failed", &[("cmd", command_name(argv))]);
                 }
                 logger.run(RunRecord {
@@ -155,9 +154,9 @@ fn run(argv: &[String]) -> ExitCode {
                 emit(&captured.stdout, &captured.stderr);
                 exit_with(captured.exit_code)
             }
-            // Invariant 6: an internal failure is never allowed to become the
-            // user's failure. If capture could not start, run the command the
-            // ordinary way and let it speak for itself.
+            // An internal failure is never allowed to become the user's
+            // failure. If capture could not start, run the command the ordinary
+            // way and let it speak for itself.
             Err(err) => {
                 let logger = env.logger();
                 logger.event(

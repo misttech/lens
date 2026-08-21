@@ -5,14 +5,13 @@
 //!
 //! Two questions, answered before anything is executed:
 //!
-//! 1. **Which binary is this?** Lens must never re-enter itself. `LENS.md`
-//!    invariant 1 rules out PATH symlinks precisely so this stays simple, but a
-//!    user who ignores that advice should get an honest command rather than a
-//!    fork bomb.
-//! 2. **Should the output be filtered?** (`LENS.md` §4.) Filtering is a service,
-//!    not an entitlement: when it cannot help, or would break something,
-//!    Lens gets out of the way. Every answer here is recorded, because
-//!    "filtering didn't work" is a question the log has to be able to answer.
+//! 1. **Which binary is this?** Lens must never re-enter itself. Refusing to
+//!    install PATH symlinks keeps this simple, but a user who installs one
+//!    anyway should get an honest command rather than a fork bomb.
+//! 2. **Should the output be filtered?** Filtering is a service, not an
+//!    entitlement: when it cannot help, or would break something, Lens gets out
+//!    of the way. Every answer here is recorded, because "filtering didn't
+//!    work" is a question the log has to be able to answer.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -20,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 /// Why a run was not filtered.
 ///
-/// Recorded on every invocation (`LENS.md` §12), which is what makes a
-/// passthrough diagnosable rather than mysterious.
+/// Recorded on every invocation, which is what makes a passthrough diagnosable
+/// rather than mysterious.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PassthroughReason {
     /// `LENS_MODE=raw`.
@@ -37,8 +36,8 @@ pub enum PassthroughReason {
     /// Resolution landed back on the Lens binary itself.
     SelfReference,
     /// Capture could not be started. Not a decision this module makes, but a
-    /// reason a run ends up unfiltered, so it is recorded in the same vocabulary
-    /// (invariant 6).
+    /// reason a run ends up unfiltered, so it is recorded in the same
+    /// vocabulary.
     CaptureFailed,
 }
 
@@ -100,7 +99,7 @@ const GIT_PATCH_INTERACTIVE: &[&str] = &["add", "checkout", "restore", "reset", 
 /// git subcommands where `-i`/`--interactive` means what it says.
 const GIT_INTERACTIVE_FLAG_SUBCOMMANDS: &[&str] = &["rebase", "add", "clean"];
 
-/// Flags that produce machine-readable output (`LENS.md` §4).
+/// Flags that produce machine-readable output.
 ///
 /// Filtering these is worse than useless: the output is already minimal, and a
 /// consumer is parsing it.
@@ -411,7 +410,7 @@ mod tests {
 
     #[test]
     fn a_missing_command_passes_through_rather_than_erroring() {
-        // The child's failure is the child's to report (invariant 6).
+        // The child's failure is the child's to report.
         let path = OsString::from("/nonexistent-dir");
         match plan(&argv(&["definitely-not-a-command"]), false, false, None, Some(&path)) {
             Plan::Passthrough { reason } => assert_eq!(reason, PassthroughReason::NotFound),

@@ -6,7 +6,7 @@
 //! This is what makes the tool's name honest. A lens changes the view, never the
 //! subject: every byte a command produced is written here before anything is
 //! filtered, and any view can be re-derived from it later without running the
-//! command again (`LENS.md` invariant 5).
+//! command again.
 //!
 //! ```text
 //! <store>/<handle>/
@@ -264,7 +264,7 @@ impl Store {
     ///
     /// Failures here are swallowed. A store that could not be pruned is a disk
     /// usage problem; a command that failed because pruning failed is a
-    /// correctness problem, and §2 says which of those is allowed.
+    /// correctness problem, and only one of those is allowed to happen.
     fn prune(&self) {
         let runs = self.list();
         let mut kept_bytes = 0u64;

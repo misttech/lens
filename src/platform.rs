@@ -19,8 +19,8 @@ use crate::static_assert;
 
 /// Exit code a shell reports for a child killed by `signum`.
 ///
-/// `LENS.md` invariant 2: the child's fate is reported unchanged, and a signal
-/// death is reported the way every shell reports it.
+/// The child's fate is reported unchanged, and a signal death is reported the
+/// way every shell reports it.
 pub fn exit_code_for_signal(signum: i32) -> i32 {
     128 + signum
 }
@@ -47,7 +47,7 @@ pub fn exit_code_for_status(status: &std::process::ExitStatus) -> i32 {
 
 /// Replace this process with `cmd`.
 ///
-/// This is how passthrough keeps invariant 6 honest. Spawning and copying
+/// This is how passthrough stays honest. Spawning and copying
 /// streams would be an imitation of the command; replacing the process image
 /// *is* the command — same stdio, same terminal control, same exit code, same
 /// signal disposition, with Lens no longer in the picture at all.
@@ -66,8 +66,8 @@ pub fn exec(cmd: &mut Command) -> std::io::Error {
 
 /// Is `fd` a terminal?
 ///
-/// Used to decide whether a child may take over the terminal (`LENS.md` §4). A
-/// wrong answer here is expensive in one direction only: capturing an
+/// Used to decide whether a child may take over the terminal. A wrong answer
+/// here is expensive in one direction only: capturing an
 /// interactive command hangs the user, while passing an inert one through just
 /// forgoes filtering. Callers resolve doubt toward passthrough.
 #[cfg(unix)]
@@ -83,7 +83,7 @@ pub const STDIN_FD: i32 = 0;
 
 // The one language boundary in this crate. Two libc calls, declared in-tree
 // rather than pulling in a crate for them: `isatty` for interactive detection
-// (§4) and `flock` for log rotation (§12).
+// and `flock` for log rotation.
 //
 // `c_int` is the ABI contract for both. Asserting its width at compile time is
 // cheap and catches a target where the assumption silently stops holding.
@@ -115,8 +115,8 @@ static_assert!(lock_op::EX == 2 && lock_op::UN == 8 && lock_op::NB == 4);
 /// Take an advisory lock on an open file, without blocking.
 ///
 /// Returns `true` if the lock was taken. A `false` return is not an error to
-/// escalate: §12 says an oversized log beats a blocked command, so the rotation
-/// path skips rotating and appends anyway.
+/// escalate: an oversized log beats a blocked command, so the rotation path
+/// skips rotating and appends anyway.
 #[cfg(unix)]
 pub fn try_lock_exclusive(file: &std::fs::File) -> bool {
     use std::os::unix::io::AsRawFd;

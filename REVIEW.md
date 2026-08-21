@@ -29,9 +29,9 @@ Style, naming, and structure are 🟡 Nit at most.
 
 ## Always check
 
-- A commit touching one of the spec's §2 invariants names the invariant in its
-  body. A commit under `src/pipeline/` or `src/adapters/` carries a `Test:`
-  footer with a real result, not "tests pass".
+- A commit touching one of the invariants in `AGENTS.md` names it in the body. A
+  commit under `src/pipeline/` or `src/adapters/` carries a `Test:` footer with
+  a real result, not "tests pass".
 - Every new module has `#[cfg(test)] mod tests` covering its own logic.
 - Every `unsafe` block has a `// SAFETY:` comment that states the precondition
   and why it holds. Any `#[cfg]` outside `src/platform.rs` is a finding.

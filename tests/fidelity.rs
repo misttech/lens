@@ -1,7 +1,7 @@
 // Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! End-to-end checks on the properties `LENS.md` §2 calls non-negotiable.
+//! End-to-end checks on the properties that are non-negotiable.
 //!
 //! These run the real binary against real children. Everything here is a
 //! property of the *tool*, not of a function, and each one is a bug rather than
@@ -48,7 +48,7 @@ fn code(output: &Output) -> i32 {
 
 #[test]
 fn exit_codes_are_propagated_unchanged() {
-    // Invariant 2. A wrong code here is worse than a wrong view: it tells the
+    // A wrong code here is worse than a wrong view: it tells the
     // caller a failed command succeeded.
     for expected in [0, 1, 3, 42, 127] {
         let out = lens(&["sh", "-c", &format!("exit {expected}")]);
@@ -58,14 +58,14 @@ fn exit_codes_are_propagated_unchanged() {
 
 #[test]
 fn signal_deaths_follow_the_shell_convention() {
-    // Invariant 2, second half: 128 + signum.
+    // 128 + signum.
     let out = lens(&["sh", "-c", "kill -TERM $$"]);
     assert_eq!(code(&out), 143);
 }
 
 #[test]
 fn streams_are_kept_separate() {
-    // Invariant 3. Merging them would be convenient and would destroy the
+    // Merging them would be convenient and would destroy the
     // signal that later lets a failing command's stderr be force-kept.
     let out = lens(&["sh", "-c", "echo out; echo err >&2"]);
     assert_eq!(String::from_utf8_lossy(&out.stdout), "out\n");
@@ -87,7 +87,7 @@ fn output_is_byte_identical_to_running_the_command_directly() {
 
 #[test]
 fn raw_mode_is_byte_identical_to_running_the_command_directly() {
-    // §16's passthrough property. LENS_MODE=raw execs the child, so this
+    // The passthrough property. LENS_MODE=raw execs the child, so this
     // compares a replaced process image against the real thing.
     let script = "printf 'x\\ny\\n'; printf 'z\\n' >&2; exit 7";
     let filtered = Command::new(lens_bin())
@@ -114,7 +114,7 @@ fn binary_output_survives_unchanged() {
 
 #[test]
 fn lens_variables_do_not_reach_the_child() {
-    // §3. A nested lens must not inherit a budget, and a child that inspects
+    // A nested lens must not inherit a budget, and a child that inspects
     // its environment must not see Lens's configuration at all.
     let out = Command::new(lens_bin())
         .args(["sh", "-c", "env | grep -c '^LENS_' || true"])
@@ -127,7 +127,7 @@ fn lens_variables_do_not_reach_the_child() {
 
 #[test]
 fn a_missing_command_fails_the_way_a_shell_fails() {
-    // Invariant 6: Lens does not editorialize about a command it could not
+    // Lens does not editorialize about a command it could not
     // find. The child's failure is reported, not replaced.
     let out = lens(&["definitely-not-a-real-command-xyz"]);
     assert_ne!(code(&out), 0);

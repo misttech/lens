@@ -3,17 +3,17 @@
 
 //! Running the child and capturing what it produced.
 //!
-//! Three properties this module owes the rest of Lens, all of them from
-//! `LENS.md` §2:
+//! Three properties this module owes the rest of Lens, each one an invariant
+//! rather than a preference:
 //!
-//! * **Exit code fidelity** (invariant 2). The child's code is propagated
+//! * **Exit code fidelity.** The child's code is propagated
 //!   unchanged, and a signal death becomes `128 + signum`.
-//! * **Stream separation** (invariant 3). stdout and stderr are captured and
+//! * **Stream separation.** stdout and stderr are captured and
 //!   emitted separately, never merged. The cost is that their interleaving is
 //!   lost relative to a terminal run; the benefit is that a stage can reason
 //!   about which stream a line came from, which is what lets a failing command's
 //!   stderr be force-kept.
-//! * **No inherited configuration** (§3). Every `LENS_*` variable is removed
+//! * **No inherited configuration.** Every `LENS_*` variable is removed
 //!   from the child's environment, so a nested `lens` — which should not exist,
 //!   but scripts surprise you — cannot inherit a budget.
 
@@ -42,7 +42,7 @@ pub struct Captured {
 /// # Errors
 ///
 /// Returns the spawn error if the child could not be started. Callers treat
-/// that as a reason to fall back to passthrough (invariant 6) rather than as a
+/// that as a reason to fall back to passthrough rather than as a
 /// failure of the user's command.
 pub fn capture(program: &std::path::Path, argv: &[String]) -> std::io::Result<Captured> {
     debug_assert!(!argv.is_empty(), "cli::parse guarantees a non-empty argv");
@@ -123,7 +123,7 @@ where
     }
 }
 
-/// Make git produce plain, unpaged, uncolored output when captured (§4).
+/// Make git produce plain, unpaged, uncolored output when captured.
 fn quiet_git(cmd: &mut Command, argv: &[String]) {
     if basename(&argv[0]) != "git" {
         return;

@@ -34,7 +34,7 @@ the tree — a module or directory name:
 | `[platform]` | `src/platform.rs` (the OS boundary) |
 | `[bench]` | `benches/`, `bench/` (add `[bench][micro]` or `[bench][retention]`) |
 | `[tests]` | `tests/`, fixtures, goldens |
-| `[docs]` | `LENS.md`, `README.md`, `docs/` |
+| `[docs]` | `README.md`, `docs/` |
 | `[build]` | `Cargo.toml`, `Makefile`, `scripts/`, CI |
 | `[repo]` or `[git]` | repo/git meta files: `.gitignore`, `.gitattributes`, `LICENSE`, `NOTICE`, editor config |
 
@@ -70,14 +70,14 @@ of budget.
 
 ### Two project-specific rules
 
-**A commit touching an invariant says which one.** The invariants in `LENS.md` §2
-are correctness properties, not tradeoffs. Name the one a change upholds or fixes
-against:
+**A commit touching an invariant says which one.** The invariants listed in
+`AGENTS.md` are correctness properties, not tradeoffs. Name the one a change
+upholds or fixes against:
 
 ```none
-Invariant 8: eliding the whole region with a marker keeps every
-file:line reference in the output correct, where renumbering would
-silently break jump-to-line.
+Line addressability: eliding the whole region with a marker keeps
+every file:line reference correct, where renumbering would silently
+break jump-to-line.
 ```
 
 **A `Test:` footer is required under `src/pipeline/` and `src/adapters/`.** Those

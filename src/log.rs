@@ -4,7 +4,7 @@
 //! The command log.
 //!
 //! Two distinct things share one file, and conflating them is how a log stops
-//! being useful (`LENS.md` §12):
+//! being useful:
 //!
 //! * **Run records** — one per Lens invocation, including passthrough. This is
 //!   what `lens stats` aggregates and what answers "why was my output mangled
@@ -12,11 +12,11 @@
 //!   need when someone reports that filtering "didn't work".
 //! * **Events** — free-text diagnostics at a level.
 //!
-//! Two rules govern everything here, both from §2:
+//! Two rules govern everything here, and both are invariants:
 //!
-//! * **Logging never touches the child's streams** (invariant 9). Nothing in
-//!   this module writes to stdout or stderr.
-//! * **Logging never fails the run** (invariant 10). A full disk, an unwritable
+//! * **Logging never touches the child's streams.** Nothing in this module
+//!   writes to stdout or stderr.
+//! * **Logging never fails the run.** A full disk, an unwritable
 //!   directory, a rotation that could not take its lock — all of it is swallowed
 //!   and the command still succeeds. [`Logger::init`] cannot return an error;
 //!   the worst it can do is degrade to [`Level::Off`].
@@ -106,11 +106,11 @@ pub struct RunRecord {
     pub cmd: String,
     /// The full command line.
     ///
-    /// §12's schema logs argv, so a command that carries a secret in its own
-    /// arguments (`mysql -pPASSWORD`) writes that secret here. That is a
-    /// deliberate trade — without argv the log cannot answer what was run —
-    /// and it is the reason command *output* never appears at any level below
-    /// trace, where it is capped at a short prefix.
+    /// The log cannot answer what was run without argv, so a command carrying a
+    /// secret in its own arguments (`mysql -pPASSWORD`) writes that secret
+    /// here. That is a deliberate trade, and it is the reason command *output*
+    /// never appears at any level below trace, where it is capped at a short
+    /// prefix.
     pub argv: Vec<String>,
     /// Where it ran.
     pub cwd: String,
@@ -209,9 +209,8 @@ impl Logger {
     /// Open the log, rotating first if the live file is oversized.
     ///
     /// Never fails. An unwritable directory, a full disk, or a rotation that
-    /// could not take its lock all produce a logger that silently discards —
-    /// because invariant 10 says a log problem may not become a command
-    /// problem.
+    /// could not take its lock all produce a logger that silently discards,
+    /// because a log problem may not become a command problem.
     pub fn init(config: &Config) -> Self {
         if config.level == Level::Off {
             return Logger { file: None, level: Level::Off };
@@ -267,8 +266,8 @@ impl Logger {
 ///
 /// Concurrency: several `lens` processes can run at once, so the rename
 /// sequence is done under an advisory lock. If the lock cannot be taken the
-/// rotation is skipped and the caller appends anyway — §12 is explicit that an
-/// oversized log beats a blocked command or a lost write.
+/// rotation is skipped and the caller appends anyway: an oversized log beats a
+/// blocked command or a lost write.
 fn rotate_if_needed(path: &Path, config: &Config) {
     let Ok(meta) = fs::metadata(path) else { return };
     if meta.len() <= config.max_size_mb.saturating_mul(1024 * 1024) {
@@ -465,7 +464,7 @@ mod tests {
 
     #[test]
     fn the_record_shape_is_the_documented_one() {
-        // §12 fixes this schema, and anything reading the log downstream —
+        // This schema is a published contract: anything reading the log —
         // `lens stats`, a user's jq pipeline — depends on the field names.
         let dir = TempDir::new("shape");
         let logger = Logger::init(&Config::new(&dir.0));
@@ -545,7 +544,7 @@ mod tests {
 
     #[test]
     fn an_unwritable_directory_degrades_instead_of_failing() {
-        // Invariant 10, the whole point of it: this must not panic and must not
+        // The whole point of the rule: this must not panic and must not
         // return an error, because the command it is logging is about to run.
         let config = Config::new("/proc/definitely/not/writable");
         let logger = Logger::init(&config);
