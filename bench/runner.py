@@ -176,7 +176,11 @@ DRIVERS = ("claude", "cursor")
 # What each driver reports. Cursor's single result object carries tokens but
 # neither turns nor tool calls, so those read zero for it — recorded as a gap
 # rather than filled in with a guess.
-DEFAULT_MODEL = {"claude": "claude-sonnet-5", "cursor": "gpt-5.3-codex"}
+#
+# The cursor default is a Grok model rather than the strongest one available:
+# a cross-run is worth having only if it can actually run, and per-model quota
+# is the thing most likely to stop it.
+DEFAULT_MODEL = {"claude": "claude-sonnet-5", "cursor": "cursor-grok-4.6-medium"}
 
 
 def agent_command(driver: str, prompt: str, model: str, turn_limit: int) -> list[str]:
@@ -345,16 +349,19 @@ def run_cell(task: Task, variant: str, repeat: int, model: str, driver: str) -> 
             task=task.name,
             variant=variant,
             repeat=repeat,
-            passed=verified.returncode == 0,
+            # A cell the agent never attempted is neither a pass nor a fail:
+            # verify.sh reports on work that was never done, and counting that
+            # as the filter losing is how a rate limit becomes a false result.
+            passed=attempted(result) and verified.returncode == 0,
             turns=int(result.get("num_turns", 0) or 0),
             tool_calls=tool_calls,
             model_tokens=total_model_tokens(usage),
-            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            output_tokens=int(
+                usage.get("output_tokens", usage.get("outputTokens", 0)) or 0
+            ),
             cost_usd=float(result.get("total_cost_usd", 0.0) or 0.0),
             wall_s=wall,
-            note=""
-            if not result.get("is_error")
-            else str(result.get("subtype", "error")),
+            note=cell_note(result),
         )
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -373,6 +380,10 @@ def summarize(cells: list[Cell]) -> list[Summary]:
     """Group cells into one row per (task, variant)."""
     rows: dict[tuple[str, str], Summary] = {}
     for cell in cells:
+        if cell.note.startswith("not attempted"):
+            # Excluded from the rate entirely. Including it would move the
+            # number the whole benchmark exists to report.
+            continue
         key = (cell.task, cell.variant)
         row = rows.get(key)
         if row is None:

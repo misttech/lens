@@ -435,7 +435,7 @@
       "output_tokens": 1163,
       "cost_usd": 0.1647521,
       "wall_s": 22.50672068609856,
-      "note": "success"
+      "note": ""
     },
     {
       "task": "last-line-trap",
@@ -596,7 +596,7 @@
     {
       "task": "fix-failing-test",
       "variant": "level0",
-      "repeat": 0,
+      "repeat": 2,
       "passed": true,
       "turns": 8,
       "tool_calls": 7,
