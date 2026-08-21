@@ -386,14 +386,14 @@ fn show_says_so_when_a_run_is_not_there() {
 }
 
 #[test]
-fn show_does_not_pretend_to_support_levels_yet() {
-    // Silently ignoring --level would mean claiming a focused view and handing
-    // back the raw one.
+fn show_level_three_is_the_stored_bytes() {
+    // The store's promise, checked at the level that claims to be raw: no
+    // parse, no re-render, the bytes as the command wrote them.
     let sandbox = Sandbox::new("show-level");
-    sandbox.lens(&["sh", "-c", "echo x"]);
+    sandbox.lens(&["sh", "-c", "printf 'x\ny\n'"]);
     let handle = sandbox.run_records()[0]["handle"].as_str().unwrap().to_string();
 
-    let out = sandbox.lens(&["show", &handle, "--level", "1"]);
-    assert_ne!(out.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not implemented yet"));
+    let out = sandbox.lens(&["show", &handle, "--level", "3"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"x\ny\n");
 }

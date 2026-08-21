@@ -4,19 +4,22 @@
 //! Lens runs a real command, keeps its full output, and shows an AI coding agent
 //! the view of that output worth spending context on.
 //!
-//! Lens runs the command, writes every byte it produced to a content-addressed
-//! store, and emits them. No filtering happens yet — what exists is the part
-//! that has to be right before anything is allowed to remove content: the
-//! child's exit code, its bytes, its terminal, a record of every invocation,
-//! and a handle that can re-derive any view of the run later.
+//! The command runs, every byte it produced goes to a content-addressed store,
+//! and a filtered view of it reaches the caller. Anything left out of that view
+//! is announced with a marker carrying the handle, so a reader always knows the
+//! rest is a request away.
 
+mod adapters;
 mod cli;
 mod executor;
 mod log;
+mod pipeline;
 mod platform;
+mod render;
 mod resolve;
 mod static_assert;
 mod store;
+mod tokens;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -24,8 +27,11 @@ use std::process::{Command, ExitCode};
 
 use crate::cli::{Invocation, Subcommand};
 use crate::log::{Level, Logger, RunRecord};
+use crate::pipeline::{Ctx, Stream};
+use crate::render::Level as ViewLevel;
 use crate::resolve::{PassthroughReason, Plan};
 use crate::store::Store;
+use crate::tokens::{Heuristic, TokenEstimator};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -131,6 +137,7 @@ fn run(argv: &[String]) -> ExitCode {
                     )
                     .ok();
 
+                let handle_str = handle.as_ref().map(|h| h.to_string());
                 let logger = env.logger();
                 if handle.is_none() {
                     // A store that could not be written has lost the ability to
@@ -138,8 +145,22 @@ fn run(argv: &[String]) -> ExitCode {
                     // more: the command still succeeds and its output lands.
                     logger.event(Level::Warn, "store write failed", &[("cmd", command_name(argv))]);
                 }
+                // Filter before logging, so the record can say what the caller
+                // actually received rather than what was captured.
+                let level = ViewLevel::from_number(
+                    level_from_env().unwrap_or(render::DEFAULT_LEVEL.number()),
+                )
+                .unwrap_or(render::DEFAULT_LEVEL);
+                let view = filter(
+                    &captured.stdout,
+                    &captured.stderr,
+                    captured.exit_code,
+                    level,
+                    handle_str.as_deref(),
+                );
+
                 logger.run(RunRecord {
-                    handle: handle.map(|h| h.to_string()),
+                    handle: handle_str,
                     cmd: command_name(argv).to_string(),
                     argv: argv.to_vec(),
                     cwd: cwd.to_string_lossy().into_owned(),
@@ -147,11 +168,17 @@ fn run(argv: &[String]) -> ExitCode {
                     dur_ms: Some(duration_ms),
                     out_bytes: Some(captured.stdout.len() as u64),
                     err_bytes: Some(captured.stderr.len() as u64),
+                    in_lines: Some(view.in_lines as u64),
+                    out_lines: Some(view.out_lines as u64),
+                    in_tok: Some(view.in_tok as u64),
+                    out_tok: Some(view.out_tok as u64),
+                    level: Some(level.number()),
+                    stages: view.stages.clone(),
                     passthrough: false,
                     reason: None,
                 });
 
-                emit(&captured.stdout, &captured.stderr);
+                emit(&view.stdout, &view.stderr);
                 exit_with(captured.exit_code)
             }
             // An internal failure is never allowed to become the user's
@@ -186,6 +213,12 @@ fn passthrough_record(
         dur_ms: None,
         out_bytes: None,
         err_bytes: None,
+        in_lines: None,
+        out_lines: None,
+        in_tok: None,
+        out_tok: None,
+        level: None,
+        stages: Vec::new(),
         passthrough: true,
         reason: Some(reason.as_str().to_string()),
     }
@@ -196,21 +229,35 @@ fn command_name(argv: &[String]) -> &str {
     argv[0].rsplit('/').next().unwrap_or(&argv[0])
 }
 
-/// `lens show <handle>`.
+/// `lens show <handle> [--level N]`.
 ///
-/// Re-emits a stored run without re-executing the command — which is the whole
-/// point of the store, and the half of it a user can observe today. `--level N`
-/// arrives with the renderer; until then every view is the raw one, which is
-/// level 3.
+/// Re-derives a view from stored bytes. The command is not re-executed, which is
+/// the whole point: a reader who wants more detail pays for the render, not for
+/// the run — and gets the same bytes however long ago it happened.
 fn show(args: &[String]) -> ExitCode {
     let env = Env::from_process();
 
-    let Some(text) = args.first() else {
+    let mut handle_text: Option<&String> = None;
+    let mut level = ViewLevel::Raw;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--level" => {
+                match rest.next().and_then(|n| n.parse().ok()).and_then(ViewLevel::from_number) {
+                    Some(parsed) => level = parsed,
+                    None => return fail(&"--level takes 0, 1, 2 or 3"),
+                }
+            }
+            other if other.starts_with('-') => {
+                return fail(&format!("unknown flag `{other}` for lens show"));
+            }
+            _ => handle_text = Some(arg),
+        }
+    }
+
+    let Some(text) = handle_text else {
         return fail(&"lens show needs a handle, e.g. lens show a3f19c2b");
     };
-    if let Some(flag) = args.iter().find(|a| a.starts_with("--")) {
-        return fail(&format!("`{flag}` is not implemented yet — it arrives with the renderer"));
-    }
     let Some(handle) = store::Handle::parse(text) else {
         return fail(&format!("`{text}` is not a handle — expected 8 hex digits"));
     };
@@ -220,16 +267,116 @@ fn show(args: &[String]) -> ExitCode {
         return fail(&format!("no run `{handle}` in {}", env.store.display()));
     };
     let stderr = store.read_stream(&handle, store::Stream::Stderr).unwrap_or_default();
+    let meta = store.read_meta(&handle).ok();
+    let exit_code = meta.as_ref().map(|m| m.exit_code).unwrap_or(0);
 
-    emit(&stdout, &stderr);
-
-    // The stored run's exit code is reported by `lens show`'s own exit code, so
-    // a script re-reading a run sees what the command did. Reading a run is not
-    // running it, but reporting success for a failed run would be a lie.
-    match store.read_meta(&handle) {
-        Ok(meta) => exit_with(meta.exit_code),
-        Err(_) => ExitCode::SUCCESS,
+    if level == ViewLevel::Raw {
+        // Byte-identical to what the command produced. No parse, no re-encode:
+        // this path is what makes the store's promise checkable.
+        emit(&stdout, &stderr);
+    } else {
+        let view = filter(&stdout, &stderr, exit_code, level, Some(handle.as_str()));
+        emit(&view.stdout, &view.stderr);
     }
+
+    // Reading a run is not running it, but reporting success for a run that
+    // failed would be a lie, so the stored code is what this exits with.
+    exit_with(exit_code)
+}
+
+/// A rendered view of both streams, and what it cost.
+struct View {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    /// Lines the command produced.
+    in_lines: usize,
+    /// Lines that reached the caller.
+    out_lines: usize,
+    /// Estimated tokens in, and out.
+    in_tok: usize,
+    out_tok: usize,
+    /// Stages that ran, in order.
+    stages: Vec<String>,
+}
+
+/// Parse, filter and render both streams at `level`.
+///
+/// The two are filtered separately and never merged: which stream a line came
+/// from is a signal the pipeline uses, and the caller gets them back on the
+/// descriptors the command wrote them to.
+fn filter(
+    stdout: &[u8],
+    stderr: &[u8],
+    exit_code: i32,
+    level: ViewLevel,
+    handle: Option<&str>,
+) -> View {
+    let ctx = Ctx { exit_code, ..Ctx::default() };
+    let stages = pipeline::default_stages();
+
+    let out = filter_stream(stdout, Stream::Stdout, &stages, &ctx, level, handle);
+    let err = filter_stream(stderr, Stream::Stderr, &stages, &ctx, level, handle);
+
+    let estimator = Heuristic;
+    View {
+        // Measured on the rendered view rather than on the kept blocks: the
+        // marker lines are part of what the caller pays for, and a reduction
+        // figure that omits them would flatter the tool.
+        in_tok: estimator.estimate(&String::from_utf8_lossy(stdout))
+            + estimator.estimate(&String::from_utf8_lossy(stderr)),
+        out_tok: estimator.estimate(&String::from_utf8_lossy(&out.bytes))
+            + estimator.estimate(&String::from_utf8_lossy(&err.bytes)),
+        in_lines: out.in_lines + err.in_lines,
+        out_lines: out.out_lines + err.out_lines,
+        stages: stages.iter().map(|stage| stage.name().to_string()).collect(),
+        stdout: out.bytes,
+        stderr: err.bytes,
+    }
+}
+
+/// One filtered stream.
+struct StreamView {
+    bytes: Vec<u8>,
+    in_lines: usize,
+    out_lines: usize,
+}
+
+/// Filter one stream, or pass it through when it is not text.
+///
+/// Output that is not valid UTF-8 is emitted unchanged. Filtering it would mean
+/// deciding what a byte sequence means, and the honest answer is that Lens does
+/// not know — a tarball, a binary diff or a compressed stream is content whose
+/// every byte matters. Mangling it into replacement characters to save tokens
+/// would break the command for the sake of reading it, so this is one more case
+/// where doubt resolves to passthrough.
+fn filter_stream(
+    raw: &[u8],
+    stream: Stream,
+    stages: &[&dyn pipeline::Stage],
+    ctx: &Ctx,
+    level: ViewLevel,
+    handle: Option<&str>,
+) -> StreamView {
+    let lines = raw.iter().filter(|b| **b == b'\n').count();
+
+    if std::str::from_utf8(raw).is_err() {
+        return StreamView { bytes: raw.to_vec(), in_lines: lines, out_lines: lines };
+    }
+
+    let mut doc = adapters::parse(raw, stream);
+    pipeline::run(&mut doc, stages, ctx);
+    let rendered = render::render(&doc, level, handle);
+
+    StreamView {
+        bytes: rendered.into_bytes(),
+        in_lines: doc.line_count(),
+        out_lines: doc.kept_line_count(),
+    }
+}
+
+/// `LENS_LEVEL`, when set to a level this build understands.
+fn level_from_env() -> Option<u8> {
+    std::env::var_os("LENS_LEVEL")?.to_string_lossy().parse().ok()
 }
 
 /// `lens stats [--since 7d] [--cmd git]`.
@@ -270,6 +417,14 @@ fn stats(args: &[String]) -> ExitCode {
     println!("runs              {:>10}", stats.runs);
     println!("passthrough       {:>10}  ({:.0}%)", stats.passthrough, pct(stats.passthrough));
     println!("captured bytes    {:>10}", stats.bytes);
+    if stats.in_tok > 0 {
+        let reduction = 100.0 - (stats.out_tok as f64 / stats.in_tok as f64) * 100.0;
+        println!("input tokens      {:>10}", stats.in_tok);
+        println!("output tokens     {:>10}", stats.out_tok);
+        // Output tokens only, and labelled as such. Prompt caching and extra
+        // turns both break the inference from this number to a bill.
+        println!("reduction         {reduction:>9.1}%  (output tokens only)");
+    }
 
     if !stats.by_command.is_empty() {
         println!("\nby command");
@@ -396,7 +551,7 @@ usage:
   lens <command> [args...]      run a command and filter its output
   lens --version
   lens --help
-  lens show <handle>            re-emit a stored run without re-running it
+  lens show <handle> [--level N]  re-derive a view without re-running it
   lens stats [--since 7d] [--cmd git]
   lens logs [--tail N] [--level warn]
 
@@ -405,6 +560,7 @@ child, including tokens that look like lens flags.
 
 environment:
   LENS_MODE=raw                 emit raw output, exit with the child's code
+  LENS_LEVEL=0..3               how much detail to show (default 2; 3 is raw)
   LENS_LOG=<level>              off error warn info debug trace (default info)
   LENS_STORE=<dir>              where runs are kept
   LENS_LOG_DIR=<dir>            where logs are kept
