@@ -36,6 +36,10 @@ pub enum PassthroughReason {
     NotFound,
     /// Resolution landed back on the Lens binary itself.
     SelfReference,
+    /// Capture could not be started. Not a decision this module makes, but a
+    /// reason a run ends up unfiltered, so it is recorded in the same vocabulary
+    /// (invariant 6).
+    CaptureFailed,
 }
 
 impl PassthroughReason {
@@ -47,6 +51,7 @@ impl PassthroughReason {
             PassthroughReason::MachineReadableFlag => "machine_readable_flag",
             PassthroughReason::NotFound => "not_found",
             PassthroughReason::SelfReference => "self_reference",
+            PassthroughReason::CaptureFailed => "capture_failed",
         }
     }
 }
@@ -453,5 +458,6 @@ mod tests {
         assert_eq!(PassthroughReason::MachineReadableFlag.as_str(), "machine_readable_flag");
         assert_eq!(PassthroughReason::NotFound.as_str(), "not_found");
         assert_eq!(PassthroughReason::SelfReference.as_str(), "self_reference");
+        assert_eq!(PassthroughReason::CaptureFailed.as_str(), "capture_failed");
     }
 }

@@ -11,6 +11,19 @@ description = "Run a command, keep its full output, show an agent the view worth
 # `lens show` has to parse meta.json. Anything else needs a written
 # justification in the commit that adds it.
 [dependencies]
+# JSON for the run store's meta.json and the command log's JSONL records. §12
+# prefers a hand-written serializer for a fixed schema, and for the write side
+# that would be fine — but `lens stats` has to parse the log back and `lens
+# show` has to parse meta.json, and a hand-rolled *parser* is a larger
+# liability than the dependency is.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# The integration tests assert on the log's JSON shape, which is a published
+# contract (§12) — reading it as text and grepping would not catch a field
+# quietly changing type.
+serde_json = "1"
 
 [profile.release]
 # The whole tool has a ~10ms wall budget (§13.1), and it is a single short-lived
