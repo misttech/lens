@@ -63,14 +63,16 @@ fn split_repeats(doc: &mut Doc) {
         }
 
         let (class, keep) = (block.class, block.keep);
-        let normalized: Vec<String> = block.lines.iter().map(|l| normalize(&l.text)).collect();
+        let exact: Vec<String> = block.lines.iter().map(|l| l.text.clone()).collect();
+        let normalized: Vec<String> = exact.iter().map(|t| normalize(t)).collect();
         let mut lines: Vec<Option<Line>> = block.lines.into_iter().map(Some).collect();
 
         let mut plain: Vec<Line> = Vec::new();
         let mut at = 0usize;
 
         while at < lines.len() {
-            let Some((window, repeats)) = repeat_at(&normalized, at, MAX_WINDOW, MIN_REPEATS)
+            let Some((window, repeats)) =
+                repeat_at(&exact, &normalized, at, MAX_WINDOW, MIN_REPEATS)
             else {
                 plain.push(lines[at].take().expect("each line is taken once"));
                 at += 1;
@@ -110,25 +112,60 @@ fn split_repeats(doc: &mut Doc) {
 
 /// The shortest window starting at `at` that repeats at least `min_repeats`
 /// times, and how many times it repeats.
+///
+/// A single line has to repeat *exactly*. Normalizing it would make `FAILED
+/// auth_1`, `FAILED auth_2` and `FAILED auth_3` one line and a count — three
+/// distinct facts replaced by a number that does not carry them. The same
+/// flattening applied to four thousand records left one line reading `×4000`.
+///
+/// Longer windows keep the normalization, because that is what a loop body
+/// needs: the timing and the counter change every iteration and mean nothing to
+/// the comparison, while the shape around them is the repetition.
+///
+/// Either way, a window that reports a failure is never collapsed. Under any
+/// doubt about whether two failures are the same failure, they are not.
 fn repeat_at(
+    exact: &[String],
     normalized: &[String],
     at: usize,
     max_window: usize,
     min_repeats: usize,
 ) -> Option<(usize, usize)> {
-    for window in 1..=max_window.min((normalized.len() - at) / min_repeats) {
+    for window in 1..=max_window.min((exact.len() - at) / min_repeats) {
+        // Normalization is what lets a loop body match across iterations whose
+        // timings and counters differ. It earns that only when the window has
+        // shape to match — two or more lines that differ from each other. A
+        // window whose lines are all the same shape is a single-line pattern
+        // wearing a longer window, and flattening it turns distinct records
+        // into one line and a count.
+        let has_shape = normalized[at..at + window].iter().any(|l| l != &normalized[at]);
+
+        let same = |a: usize, b: usize| -> bool {
+            if has_shape {
+                normalized[a..a + window] == normalized[b..b + window]
+            } else {
+                exact[a..a + window] == exact[b..b + window]
+            }
+        };
+
         let mut repeats = 1usize;
-        while at + window * (repeats + 1) <= normalized.len()
-            && normalized[at..at + window]
-                == normalized[at + window * repeats..at + window * (repeats + 1)]
-        {
+        while at + window * (repeats + 1) <= exact.len() && same(at, at + window * repeats) {
             repeats += 1;
         }
-        if repeats >= min_repeats {
+
+        if repeats >= min_repeats && !reports_failure(&exact[at..at + window]) {
             return Some((window, repeats));
         }
     }
     None
+}
+
+/// Does this window report a failure?
+///
+/// Two failures that look alike are still two failures, and a reader who is
+/// shown one of them plus a count has been told the wrong thing.
+fn reports_failure(window: &[String]) -> bool {
+    matches!(super::classify::classify_text(&window.join("\n")), Class::Error | Class::Failure)
 }
 
 /// A block carrying the class and keep state of the one it came from.
@@ -301,6 +338,51 @@ mod tests {
         let mut doc = doc_of(&["warn: x", "other", "warn: x"]);
         Dedupe.apply(&mut doc, &Ctx::default());
         assert_eq!(kept(&doc), vec!["warn: x", "other", "warn: x"]);
+    }
+
+    #[test]
+    fn lines_that_differ_only_by_a_number_are_not_one_line() {
+        // Normalizing a single line made four thousand distinct records read as
+        // one plus `×4000`. The count is not the information the records
+        // carried, and no marker makes it so.
+        let lines: Vec<String> =
+            (1..=20).map(|i| format!("processed record {i} in {}us", i * 37)).collect();
+        let mut doc = Doc {
+            blocks: vec![Block::new(
+                lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| Line { text: text.clone(), origin: i + 1 })
+                    .collect(),
+            )],
+            source: super::super::Stream::Stdout,
+        };
+        Dedupe.apply(&mut doc, &Ctx::default());
+
+        let survivors: usize = doc.blocks.iter().filter(|b| b.kept()).map(|b| b.lines.len()).sum();
+        assert_eq!(survivors, 20, "every record is its own fact");
+    }
+
+    #[test]
+    fn repeated_failures_are_never_collapsed() {
+        // Three failing tests that differ only by an index are three failures.
+        // Showing one and a count tells the reader something untrue about what
+        // broke, which is the worst thing this tool can do.
+        let mut doc =
+            doc_of(&["FAILED tests::auth_1", "FAILED tests::auth_2", "FAILED tests::auth_3"]);
+        Dedupe.apply(&mut doc, &Ctx::default());
+        assert!(doc.blocks.iter().all(|b| b.kept()), "{:?}", kept(&doc));
+        assert!(!kept(&doc).iter().any(|t| t.contains("[lens:")), "and no count is claimed");
+    }
+
+    #[test]
+    fn identical_lines_still_collapse() {
+        // The fix for the two tests above must not cost the case dedupe exists
+        // for: the same line, verbatim, many times.
+        let mut doc = doc_of(&["warning: unused", "warning: unused", "warning: unused"]);
+        Dedupe.apply(&mut doc, &Ctx::default());
+        assert_eq!(kept(&doc).len(), 1);
+        assert!(kept(&doc)[0].contains("×3"));
     }
 
     #[test]
