@@ -1,0 +1,15 @@
+# build artifacts
+#
+# `out/` is the only place build products go: `out/<target>/<arch>/lens` for
+# installed binaries, `out/.cargo` for cargo's intermediates (CARGO_TARGET_DIR
+# is pinned there by the Makefile). Nothing is written to `target/`, but ignore
+# it anyway for the case where cargo is invoked without the Makefile.
+/out/
+/target/
+
+# editor / OS
+*.swp
+.DS_Store
+
+# design spec, kept out of tree
+LENS.md

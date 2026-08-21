@@ -1,0 +1,7 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Pin rustup stable so `cargo` and `rustc` match. rustup auto-selects this for
+# every command in the tree.
+[toolchain]
+channel = "stable"
