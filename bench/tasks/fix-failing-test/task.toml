@@ -1,0 +1,19 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "fix-failing-test"
+summary = "One failing test in a 941-line log"
+
+# What the agent is told. It names the command but not the failure: finding the
+# failure in the output is the thing being measured.
+prompt = """
+The test suite in this directory is failing. Run it with:
+
+    {lens} python3 suite.py
+
+Find the failing test, fix the code in app.py so it passes, and run the suite
+again to confirm. Do not edit suite.py.
+"""
+
+turn_limit = 20
+timeout_s = 300

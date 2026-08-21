@@ -24,5 +24,5 @@ bench: ## micro-benchmarks: gate on growth, report latency
 bench-save: ## rewrite the committed latency baseline from this machine
 	$(CARGO) bench --bench pipeline -- --save
 
-retention: ## retention benchmark: slow, nondeterministic, spends API credits
-	$(CARGO) run --release --bin lens-bench
+retention: ## retention benchmark: prints the plan; add RUN=1 to spend credits
+	python3 bench/runner.py $(if $(RUN),--run,) $(RETENTION_ARGS)
