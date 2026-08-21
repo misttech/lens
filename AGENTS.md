@@ -85,6 +85,17 @@ recorded fixtures in `tests/fixtures/`. Two checks, and only one of them gates:
 The library exists so the benchmark can measure the pipeline directly. The
 binary is a thin caller over it.
 
+`bench/runner.py` is the retention benchmark: for every (task, variant, repeat)
+it starts from a clean directory, runs a real agent against a real command, and
+asks a script whether the work was done. Success is mechanically verifiable — no
+model judges another model's work. It prints its plan and spends nothing unless
+given `--run`, because a benchmark that can charge you by accident is one nobody
+runs twice.
+
+The number it exists to produce is the knee: where task success starts to fall.
+A run reporting 90% fewer tokens and 60% success is a worse tool than one
+reporting 70% fewer and 100%.
+
 ## Platform
 
 Linux is the verified target. macOS compiles and its branches are written but

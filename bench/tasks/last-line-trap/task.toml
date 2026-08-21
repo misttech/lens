@@ -1,0 +1,20 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "last-line-trap"
+summary = "The one line that matters is the last of 5,000"
+
+# The trap this exists to catch: any filter that keeps a prefix, a head, or the
+# first N interesting-looking lines scores zero here, however good its
+# compression ratio looks.
+prompt = """
+Run the deployment check:
+
+    {lens} sh ./deploy-check.sh
+
+It prints the configuration key that this environment requires. Write that key,
+and nothing else, into a file called answer.txt in this directory.
+"""
+
+turn_limit = 15
+timeout_s = 300
