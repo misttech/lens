@@ -48,11 +48,21 @@ BASELINE = RESULTS_DIR / "retention-baseline.json"
 
 # How the command's output reaches the agent.
 #
-# `raw` is the control: no Lens at all. The rest run through Lens at a level,
-# which is the sweep this build can offer — a token budget is a knob the ranking
-# stages have not grown yet, and inventing one here would measure nothing.
-VARIANTS: dict[str, dict[str, str] | None] = {
-    "raw": None,
+# Every variant runs the same command line. The agent is always told to type
+# `lens <cmd>`, and what differs is only what Lens then shows it — `raw` is a
+# passthrough, byte-identical to running the command directly.
+#
+# This matters more than it looks. The first version of this file substituted an
+# absolute path into the prompt for filtered variants and nothing for the
+# control, so the two arms differed in the instruction as well as the output:
+# the agent skipped the long unfamiliar path, ran the command its own way, and
+# the numbers compared two different behaviours rather than two views.
+#
+# Levels are the sweep this build can offer. A token budget is a knob the
+# ranking stages have not grown yet, and inventing one here would measure
+# nothing.
+VARIANTS: dict[str, dict[str, str]] = {
+    "raw": {"LENS_MODE": "raw"},
     "level3": {"LENS_LEVEL": "3"},
     "level2": {"LENS_LEVEL": "2"},
     "level1": {"LENS_LEVEL": "1"},
@@ -80,6 +90,15 @@ class Task:
     @property
     def verify(self) -> Path:
         return self.directory / "verify.sh"
+
+
+# How long to wait before retrying a cell the agent never attempted.
+RETRY_PAUSE_S = 20
+
+
+def attempted(result: dict) -> bool:
+    """Did the agent actually try? Zero tokens means it never started."""
+    return total_model_tokens(result.get("usage", {}) or {}) > 0
 
 
 @dataclass
@@ -149,27 +168,33 @@ def lens_binary() -> Path:
     return REPO_ROOT / "out" / target / arch / "lens"
 
 
-def run_agent(
-    task: Task, work: Path, variant: str, model: str
-) -> tuple[dict, int, float]:
-    """Run the agent once. Returns (result object, tool calls, wall seconds).
+# The agents this can drive. Cross-running matters: a curve produced by one
+# agent measures that agent's habits as much as the filter's quality, and a
+# result that only holds for one of them is a result about the agent.
+DRIVERS = ("claude", "cursor")
 
-    stream-json rather than json: the result object carries turns and tokens but
-    not tool calls, and tool calls are what catch the failure mode this whole
-    benchmark exists to detect — a filter that saves tokens per call by causing
-    more calls has not saved anything.
-    """
-    lens = "" if variant == "raw" else str(lens_binary())
-    prompt = task.prompt.replace("{lens}", lens).replace("  ", " ").strip()
+# What each driver reports. Cursor's single result object carries tokens but
+# neither turns nor tool calls, so those read zero for it — recorded as a gap
+# rather than filled in with a guess.
+DEFAULT_MODEL = {"claude": "claude-sonnet-5", "cursor": "gpt-5.3-codex"}
 
-    env = dict(os.environ)
-    env.update(VARIANTS[variant] or {})
-    # Isolate the store and log: a benchmark must not read or write a
-    # developer's real cache.
-    env["LENS_STORE"] = str(work / ".lens" / "store")
-    env["LENS_LOG_DIR"] = str(work / ".lens" / "logs")
 
-    command = [
+def agent_command(driver: str, prompt: str, model: str, turn_limit: int) -> list[str]:
+    """The command line for one agent run."""
+    if driver == "cursor":
+        return [
+            "cursor-agent",
+            "-p",
+            prompt,
+            "--output-format",
+            "json",
+            "--model",
+            model,
+            # Cursor refuses to touch an untrusted directory, and every work
+            # directory here is one this harness just created.
+            "--force",
+        ]
+    return [
         "claude",
         "-p",
         prompt,
@@ -179,10 +204,68 @@ def run_agent(
         "--model",
         model,
         "--max-turns",
-        str(task.turn_limit),
+        str(turn_limit),
         "--permission-mode",
         "bypassPermissions",
     ]
+
+
+def parse_agent_output(driver: str, stdout: str) -> tuple[dict, int]:
+    """Pull the result object and a tool-call count out of what the agent wrote."""
+    if driver == "cursor":
+        for line in reversed(stdout.splitlines()):
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "result":
+                return event, 0
+        return {"is_error": True, "subtype": "no_result"}, 0
+
+    result: dict = {"is_error": True, "subtype": "no_result"}
+    tool_calls = 0
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "result":
+            result = event
+        content = event.get("message", {}).get("content", [])
+        if isinstance(content, list):
+            tool_calls += sum(1 for part in content if part.get("type") == "tool_use")
+    return result, tool_calls
+
+
+def run_agent(
+    task: Task, work: Path, variant: str, model: str, driver: str
+) -> tuple[dict, int, float]:
+    """Run the agent once. Returns (result object, tool calls, wall seconds).
+
+    stream-json rather than json: the result object carries turns and tokens but
+    not tool calls, and tool calls are what catch the failure mode this whole
+    benchmark exists to detect — a filter that saves tokens per call by causing
+    more calls has not saved anything.
+    """
+    # `lens` on PATH, so every variant's prompt is the same string and the only
+    # difference between arms is what the command shows.
+    bin_dir = work / ".bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    link = bin_dir / "lens"
+    if not link.exists():
+        link.symlink_to(lens_binary())
+
+    prompt = task.prompt.replace("{lens}", "lens").strip()
+
+    env = dict(os.environ)
+    env.update(VARIANTS[variant])
+    env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+    # Isolate the store and log: a benchmark must not read or write a
+    # developer's real cache.
+    env["LENS_STORE"] = str(work / ".lens" / "store")
+    env["LENS_LOG_DIR"] = str(work / ".lens" / "logs")
+
+    command = agent_command(driver, prompt, model, task.turn_limit)
 
     started = time.monotonic()
     try:
@@ -199,19 +282,16 @@ def run_agent(
         return {"is_error": True, "subtype": "timeout"}, 0, time.monotonic() - started
 
     wall = time.monotonic() - started
-    result: dict = {"is_error": True, "subtype": "no_result"}
-    tool_calls = 0
+    result, tool_calls = parse_agent_output(driver, proc.stdout)
 
-    for line in proc.stdout.splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") == "result":
-            result = event
-        content = event.get("message", {}).get("content", [])
-        if isinstance(content, list):
-            tool_calls += sum(1 for part in content if part.get("type") == "tool_use")
+    if proc.returncode != 0:
+        # A cell that failed for a reason outside the thing being measured has
+        # to say so. Silently scoring it as a task failure would blame the
+        # filter for the harness.
+        last = [line for line in proc.stderr.splitlines() if line.strip()]
+        result["subtype"] = (
+            f"agent exit {proc.returncode}: {last[-1][:120] if last else ''}"
+        )
 
     return result, tool_calls, wall
 
@@ -222,26 +302,39 @@ def total_model_tokens(usage: dict) -> int:
     Cache reads count. They are cheaper, not free, and a filter that shrinks the
     written output while growing the context is not an improvement.
     """
-    return sum(
-        int(usage.get(key, 0) or 0)
-        for key in (
-            "input_tokens",
-            "output_tokens",
-            "cache_read_input_tokens",
-            "cache_creation_input_tokens",
-        )
+    keys = (
+        # claude
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        # cursor
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
     )
+    return sum(int(usage.get(key, 0) or 0) for key in keys)
 
 
-def run_cell(task: Task, variant: str, repeat: int, model: str) -> Cell:
-    """Set up, run, verify, tear down."""
+def run_cell(task: Task, variant: str, repeat: int, model: str, driver: str) -> Cell:
+    """Set up, run, verify, tear down.
+
+    An agent that returns in a couple of seconds having spent no tokens did not
+    attempt the task — a rate limit, an expired credential, a CLI that could not
+    start. Scoring that as a task failure would blame the filter for the
+    harness, so it is retried once and then recorded as what it is.
+    """
     work = Path(tempfile.mkdtemp(prefix=f"lens-bench-{task.name}-"))
     try:
         subprocess.run(
             ["sh", str(task.setup), str(work)], check=True, capture_output=True
         )
 
-        result, tool_calls, wall = run_agent(task, work, variant, model)
+        result, tool_calls, wall = run_agent(task, work, variant, model, driver)
+        if not attempted(result):
+            time.sleep(RETRY_PAUSE_S)
+            result, tool_calls, wall = run_agent(task, work, variant, model, driver)
 
         verified = subprocess.run(
             ["sh", str(task.verify), str(work)], capture_output=True, check=False
@@ -265,6 +358,15 @@ def run_cell(task: Task, variant: str, repeat: int, model: str) -> Cell:
         )
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def cell_note(result: dict) -> str:
+    """Why a cell is not a clean result, if it is not."""
+    if not attempted(result):
+        return f"not attempted: {result.get('subtype', 'unknown')}"
+    if result.get("is_error"):
+        return str(result.get("subtype", "error"))
+    return ""
 
 
 def summarize(cells: list[Cell]) -> list[Summary]:
@@ -331,9 +433,12 @@ def find_knee(summaries: list[Summary]) -> str | None:
     return None
 
 
-def to_json(cells: list[Cell], summaries: list[Summary], model: str) -> str:
+def to_json(
+    cells: list[Cell], summaries: list[Summary], model: str, driver: str
+) -> str:
     return json.dumps(
         {
+            "driver": driver,
             "model": model,
             "knee": find_knee(summaries),
             "summaries": [
@@ -356,9 +461,12 @@ def to_json(cells: list[Cell], summaries: list[Summary], model: str) -> str:
     )
 
 
-def plan(tasks: list[Task], variants: list[str], repeats: int, model: str) -> None:
+def plan(
+    tasks: list[Task], variants: list[str], repeats: int, model: str, driver: str
+) -> None:
     """Say what a run would do, and what it would cost, without doing it."""
     cells = len(tasks) * len(variants) * repeats
+    print(f"driver    {driver}")
     print(f"model     {model}")
     print(f"tasks     {', '.join(t.name for t in tasks)}")
     print(f"variants  {', '.join(variants)}")
@@ -379,7 +487,8 @@ def main() -> int:
     parser.add_argument("--tasks", help="comma-separated task names")
     parser.add_argument("--variants", default=",".join(DEFAULT_VARIANTS))
     parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--model", default="claude-sonnet-5")
+    parser.add_argument("--driver", default="claude", choices=DRIVERS)
+    parser.add_argument("--model", help="defaults to the driver's usual model")
     parser.add_argument("--out", type=Path, help="write the full result JSON here")
     parser.add_argument("--save-baseline", action="store_true")
     args = parser.parse_args()
@@ -396,11 +505,13 @@ def main() -> int:
         print(f"unknown variant(s): {', '.join(unknown)}", file=sys.stderr)
         return 1
 
+    model = args.model or DEFAULT_MODEL[args.driver]
+
     if not args.run:
-        plan(tasks, variants, args.repeats, args.model)
+        plan(tasks, variants, args.repeats, model, args.driver)
         return 0
 
-    if not lens_binary().is_file() and any(v != "raw" for v in variants):
+    if not lens_binary().is_file():
         print(f"no binary at {lens_binary()} — run `make build` first", file=sys.stderr)
         return 1
 
@@ -415,7 +526,7 @@ def main() -> int:
                 print(
                     f"[{done}/{total}] {task.name} {variant} #{repeat + 1}", flush=True
                 )
-                cell = run_cell(task, variant, repeat, args.model)
+                cell = run_cell(task, variant, repeat, model, args.driver)
                 cells.append(cell)
                 status = "pass" if cell.passed else f"FAIL {cell.note}".strip()
                 print(
@@ -428,11 +539,25 @@ def main() -> int:
     summaries = summarize(cells)
     report(summaries)
 
-    payload = to_json(cells, summaries, args.model)
+    unattempted = [c for c in cells if c.note.startswith("not attempted")]
+    if unattempted:
+        print(f"\n{len(unattempted)} cell(s) the agent never attempted:")
+        for cell in unattempted[:5]:
+            print(f"  {cell.task} {cell.variant} #{cell.repeat + 1} — {cell.note}")
+
+    payload = to_json(cells, summaries, model, args.driver)
     if args.out:
         args.out.write_text(payload)
         print(f"\nwrote {args.out}")
+
     if args.save_baseline:
+        if unattempted:
+            # A curve with holes in it reads as a curve. Refusing is the only
+            # way the committed baseline stays something anyone can trust.
+            print(
+                "\nrefusing to save a baseline with unattempted cells", file=sys.stderr
+            )
+            return 1
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(payload)
         print(f"baseline written to {BASELINE}")
