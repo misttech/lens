@@ -15,6 +15,12 @@ itself.
   sound. Unsafe is confined to `src/platform.rs`.
 - **Layout and ABI assumptions are asserted at compile time**, with
   `static_assert!`, not documented in prose and not left to a test.
+- **Never write down an account's usage state.** Spend to date, remaining quota,
+  rate-limit messages, plan tier, reset dates: none of it belongs in a commit
+  message, a pull request, a results file, or a comment. It says nothing about
+  the code, it is stale within days, and it is nobody's business outside the
+  account. When a run is blocked by one, say the run was blocked and why it
+  matters to the result — not what the provider said about the account.
 - **Linear history.** `main` is rebase merged; squash and merge commits are
   disabled. Every commit lands individually, so every commit builds, passes
   tests, and carries a message worth keeping. See
