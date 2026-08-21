@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    # The verified target. This job gates merges.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # rustfmt.toml sets imports_granularity, a nightly-only option, so the
+      # format check needs a nightly rustfmt. Nothing else does.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: make check
+      - run: make test
+
+  macos:
+    # macOS is a compiled placeholder, not a verified platform: this job catches
+    # compile breakage in the cfg branches early without blocking a merge. It is
+    # promoted to a required check whenever someone first verifies the platform
+    # end to end.
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: make check
+      - run: make test
