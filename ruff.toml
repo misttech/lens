@@ -1,0 +1,17 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ruff formats and lints; it is black-compatible, so one tool replaces
+# black + isort + flake8.
+
+line-length = 88
+target-version = "py313"
+
+[lint]
+# The default rules plus the ones that catch what review would otherwise have
+# to: unused imports and variables, import order, bugbear's foot-guns, and
+# comprehension and pathlib idioms.
+select = ["E", "F", "I", "B", "C4", "UP", "PTH", "RUF"]
+
+[format]
+docstring-code-format = true

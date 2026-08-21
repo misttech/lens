@@ -6,6 +6,7 @@
 include build/arch.mk
 include build/cargo.mk
 include build/bench.mk
+include build/python.mk
 
 .PHONY: all help clean
 

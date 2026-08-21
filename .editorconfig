@@ -1,0 +1,27 @@
+# This file defines indentation style for the lens tree in a format usable by
+# many editors. For more information on the format and supported editors, see
+# https://editorconfig.org.
+
+[*]
+indent_style = space
+indent_size = 2
+end_of_line = lf
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{rs,py}]
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+indent_size = unset
+
+[*.mk]
+indent_style = tab
+indent_size = unset
+
+# Two trailing spaces are a line break in markdown, so trimming them changes
+# the rendered document.
+[*.md]
+trim_trailing_whitespace = false

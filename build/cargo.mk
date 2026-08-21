@@ -27,7 +27,7 @@ build: ## release binary into out/<target>/<arch>/lens
 test: ## unit, integration and property tests
 	$(CARGO) test --all-targets
 
-check: fmt clippy ## format check and lints
+check: fmt fmt-py-check clippy lint-py ## format checks and lints
 
 fmt: ## rustfmt --check (nightly: rustfmt.toml uses imports_granularity)
 	$(CARGO) +nightly fmt --check

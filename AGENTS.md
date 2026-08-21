@@ -75,6 +75,16 @@ nothing claims it works until someone runs the suite there; CI runs it as an
 advisory job. Windows has no code. Every `#[cfg]` in the tree lives in
 `src/platform.rs`, so a port is a matter of implementing one file.
 
+## Repository tooling
+
+Tooling written for this repository is Python, formatted and linted with ruff
+(`ruff.toml`, `make fmt-py`). It lives under `tools/` and is covered by
+`make check` like everything else. `mise.toml` pins the versions, so a fresh
+clone runs the same ruff as CI.
+
+Shell is for what a Makefile already does — a few lines of glue. Anything with
+branching, argument parsing, or output to parse is Python.
+
 ## Dependencies
 
 Approved: `regex`, `serde` + `serde_json` + `toml`, `anyhow`. Anything else needs

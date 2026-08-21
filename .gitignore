@@ -7,9 +7,30 @@
 /out/
 /target/
 
+# python tooling
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# mise local overrides
+mise.local.toml
+.mise.local.toml
+
 # editor / OS
-*.swp
+.*.sw?
+*.orig
+.envrc
+.idea/
+.vscode/
 .DS_Store
+Thumbs.db
+tags
+
+# One checked-in workspace, named for the repo. A personal one stays personal.
+*.code-workspace
+!lens.code-workspace
 
 # design spec, kept out of tree
 LENS.md

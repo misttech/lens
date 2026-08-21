@@ -1,0 +1,18 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Toolchains for this repository. Pinning them here means a fresh clone builds
+# with no setup ritual and every machine runs the same versions.
+#
+# rust-toolchain.toml pins the Rust channel for cargo itself; this file pins the
+# tools around it.
+
+[tools]
+# Nightly rustfmt is required by rustfmt.toml's imports_granularity; everything
+# else runs on the stable channel that rust-toolchain.toml selects.
+python = "3.13"
+ruff = "latest"
+
+[settings]
+# Fail loudly on an unpinned tool rather than silently using whatever is on PATH.
+idiomatic_version_file_enable_tools = []
