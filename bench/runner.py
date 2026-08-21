@@ -28,6 +28,7 @@ is a worse tool than one reporting 70% fewer and 100%.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -156,6 +157,21 @@ def load_tasks(only: list[str] | None) -> list[Task]:
             )
         )
     return tasks
+
+
+def binary_fingerprint() -> str:
+    """Which build produced a curve.
+
+    Rebuilding mid-sweep silently splits a run across two versions of the thing
+    being measured — early cells describe one filter and later cells another.
+    Recording the fingerprint does not prevent that, but it means a curve can be
+    checked against the build it claims to describe.
+    """
+    binary = lens_binary()
+    if not binary.is_file():
+        return "missing"
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()[:12]
+    return f"{digest} ({binary.stat().st_size} bytes)"
 
 
 def lens_binary() -> Path:
@@ -451,6 +467,7 @@ def to_json(
         {
             "driver": driver,
             "model": model,
+            "binary": binary_fingerprint(),
             "knee": find_knee(summaries),
             "summaries": [
                 {
@@ -526,6 +543,9 @@ def main() -> int:
         print(f"no binary at {lens_binary()} — run `make build` first", file=sys.stderr)
         return 1
 
+    fingerprint = binary_fingerprint()
+    print(f"binary    {fingerprint}")
+
     cells: list[Cell] = []
     total = len(tasks) * len(variants) * args.repeats
     done = 0
@@ -546,6 +566,15 @@ def main() -> int:
                     f"{cell.wall_s:.0f}s",
                     flush=True,
                 )
+
+    if binary_fingerprint() != fingerprint:
+        # Every cell after the rebuild measured a different filter, so the curve
+        # describes no single version of anything.
+        print(
+            "\nthe binary changed during the run; this curve is not a result",
+            file=sys.stderr,
+        )
+        return 1
 
     summaries = summarize(cells)
     report(summaries)
