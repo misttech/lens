@@ -15,7 +15,7 @@
 //! the four hundred copies carried, so nothing decision-relevant is lost — and
 //! the copies are still in the store if the reader wants them.
 
-use super::{Block, Class, Ctx, Doc, Keep, Line, Stage};
+use super::{Block, Class, Ctx, Doc, Keep, Kind, Line, Stage};
 
 /// The dedupe stage.
 #[derive(Debug, Clone, Copy)]
@@ -62,7 +62,7 @@ fn split_repeats(doc: &mut Doc) {
             continue;
         }
 
-        let (class, keep) = (block.class, block.keep);
+        let (class, keep, kind) = (block.class, block.keep, block.kind.clone());
         let exact: Vec<String> = block.lines.iter().map(|l| l.text.clone()).collect();
         let normalized: Vec<String> = exact.iter().map(|t| normalize(t)).collect();
         let mut lines: Vec<Option<Line>> = block.lines.into_iter().map(Some).collect();
@@ -81,7 +81,7 @@ fn split_repeats(doc: &mut Doc) {
 
             // Everything before the repetition ends its own block.
             if !plain.is_empty() {
-                rebuilt.push(rebuild(std::mem::take(&mut plain), class, keep));
+                rebuilt.push(rebuild(std::mem::take(&mut plain), class, keep, kind.clone()));
             }
 
             let take = |lines: &mut Vec<Option<Line>>, from: usize, count: usize| -> Vec<Line> {
@@ -90,12 +90,12 @@ fn split_repeats(doc: &mut Doc) {
                     .collect()
             };
 
-            let mut survivor = rebuild(take(&mut lines, at, window), class, keep);
+            let mut survivor = rebuild(take(&mut lines, at, window), class, keep, kind.clone());
             annotate_block(&mut survivor, repeats);
             rebuilt.push(survivor);
 
             let copies = take(&mut lines, at + window, window * (repeats - 1));
-            let mut dropped = rebuild(copies, class, keep);
+            let mut dropped = rebuild(copies, class, keep, kind.clone());
             dropped.drop_with("dedupe");
             rebuilt.push(dropped);
 
@@ -103,7 +103,7 @@ fn split_repeats(doc: &mut Doc) {
         }
 
         if !plain.is_empty() {
-            rebuilt.push(rebuild(plain, class, keep));
+            rebuilt.push(rebuild(plain, class, keep, kind));
         }
     }
 
@@ -169,10 +169,11 @@ fn reports_failure(window: &[String]) -> bool {
 }
 
 /// A block carrying the class and keep state of the one it came from.
-fn rebuild(lines: Vec<Line>, class: Class, keep: Keep) -> Block {
+fn rebuild(lines: Vec<Line>, class: Class, keep: Keep, kind: Kind) -> Block {
     let mut block = Block::new(lines);
     block.class = class;
     block.keep = keep;
+    block.kind = kind;
     block
 }
 

@@ -90,7 +90,7 @@ fn plot_json_matches_config_for_the_same_argv() {
     assert_eq!(plot_v, config_v);
     assert_eq!(plot_v["lens"]["value"], "git-diff");
     assert_eq!(plot_v["budget"]["value"], 6000);
-    assert_eq!(plot_v["adapter"]["value"], "generic");
+    assert_eq!(plot_v["adapter"]["value"], "git");
 }
 
 #[test]

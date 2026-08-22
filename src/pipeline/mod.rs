@@ -75,6 +75,26 @@ pub enum Class {
 
 static_assert_size_and_align!(Class, 1, 1);
 
+/// What a block is, structurally.
+///
+/// Severity is [`Class`]. This is shape: a hunk, a commit header, or nothing
+/// an adapter recognized. Generic parsing never sets anything but [`Kind::Plain`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Kind {
+    /// No adapter structure.
+    #[default]
+    Plain,
+    /// A file or hunk from a unified diff, or a path from `git status`.
+    Diff {
+        /// Path the change is about. New name, for a rename.
+        file: String,
+        /// The `@@` line, verbatim, when this block is a hunk.
+        hunk: Option<String>,
+    },
+    /// A section header: a commit, a status group.
+    Header,
+}
+
 /// Whether a block survives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Keep {
@@ -109,12 +129,21 @@ pub struct Block {
     pub keep: Keep,
     /// Set when `keep` is [`Keep::Drop`].
     pub elided: Option<Elision>,
+    /// Structure, when an adapter recognized it. Generic output stays [`Kind::Plain`].
+    pub kind: Kind,
 }
 
 impl Block {
     /// A block of ordinary output.
     pub fn new(lines: Vec<Line>) -> Self {
-        Block { lines, class: Class::default(), score: 0.0, keep: Keep::default(), elided: None }
+        Block {
+            lines,
+            class: Class::default(),
+            score: 0.0,
+            keep: Keep::default(),
+            elided: None,
+            kind: Kind::default(),
+        }
     }
 
     /// Mark this block as outside the view, recording why.
