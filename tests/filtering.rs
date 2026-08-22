@@ -34,7 +34,8 @@ impl Sandbox {
         let mut cmd = Command::new(lens_bin());
         cmd.args(args)
             .env("LENS_STORE", self.root.join("store"))
-            .env("LENS_LOG_DIR", self.root.join("logs"));
+            .env("LENS_LOG_DIR", self.root.join("logs"))
+            .env("LENS_CONFIG", self.root.join("config.toml"));
         for (key, value) in env {
             cmd.env(key, value);
         }
