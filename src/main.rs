@@ -9,8 +9,10 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 use lens::cli::{Invocation, Subcommand};
+use lens::config::{self, ResolveInput, ResolvedPipeline};
 use lens::log::{Level, Logger, RunRecord};
 use lens::pipeline::{Ctx, Stream};
+use lens::plot::{self, Format as PlotFormat};
 use lens::render::Level as ViewLevel;
 use lens::resolve::{PassthroughReason, Plan};
 use lens::store::Store;
@@ -47,16 +49,22 @@ fn main() -> ExitCode {
             println!("lens {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Invocation::Subcommand { name: Subcommand::Show, args } => show(&args),
-        Invocation::Subcommand { name: Subcommand::Explain, args } => explain(&args),
-        Invocation::Subcommand { name: Subcommand::Stats, args } => stats(&args),
-        Invocation::Subcommand { name: Subcommand::Logs, args } => logs(&args),
-        Invocation::Subcommand { name, .. } => {
-            // Naming what it waits on is more useful than "unimplemented": it
-            // says this is a gap in the build, not a missing feature.
-            fail(&format!("`lens {name}` is not implemented yet — it arrives with the pipeline"))
+        Invocation::Subcommand { name: Subcommand::Show, args, budget, use_lens } => {
+            show(&args, budget, use_lens)
         }
-        Invocation::Run { argv, budget } => run(&argv, budget),
+        Invocation::Subcommand { name: Subcommand::Explain, args, budget, use_lens } => {
+            explain(&args, budget, use_lens)
+        }
+        Invocation::Subcommand { name: Subcommand::Stats, args, .. } => stats(&args),
+        Invocation::Subcommand { name: Subcommand::Logs, args, .. } => logs(&args),
+        Invocation::Subcommand { name: Subcommand::Plot, args, budget, use_lens } => {
+            plot_cmd(&args, budget, use_lens)
+        }
+        Invocation::Subcommand { name: Subcommand::Lenses, args, .. } => lenses_cmd(&args),
+        Invocation::Subcommand { name: Subcommand::Config, args, budget, use_lens } => {
+            config_cmd(&args, budget, use_lens)
+        }
+        Invocation::Run { argv, budget, use_lens } => run(&argv, budget, use_lens),
     }
 }
 
@@ -99,7 +107,11 @@ fn log_level_from_env() -> Level {
 }
 
 /// Run a command: passthrough or capture, then propagate its fate.
-fn run(argv: &[String], cli_budget: Option<usize>) -> ExitCode {
+fn run(argv: &[String], cli_budget: Option<usize>, use_lens: Option<String>) -> ExitCode {
+    let resolved = match resolve_pipeline(argv, cli_budget, use_lens.as_deref()) {
+        Ok(resolved) => resolved,
+        Err(err) => return fail(&err),
+    };
     let env = Env::from_process();
     let mode_raw =
         std::env::var_os("LENS_MODE").is_some_and(|mode| mode.eq_ignore_ascii_case("raw"));
@@ -150,14 +162,13 @@ fn run(argv: &[String], cli_budget: Option<usize>) -> ExitCode {
                     level_from_env().unwrap_or(lens::render::DEFAULT_LEVEL.number()),
                 )
                 .unwrap_or(lens::render::DEFAULT_LEVEL);
-                let budget = cli_budget.or_else(budget_from_env);
                 let filtered = filter(
                     &captured.stdout,
                     &captured.stderr,
                     captured.exit_code,
                     level,
                     handle_str.as_deref(),
-                    budget,
+                    &resolved,
                 );
 
                 logger.run(RunRecord {
@@ -246,12 +257,32 @@ fn command_name(argv: &[String]) -> &str {
     argv[0].rsplit('/').next().unwrap_or(&argv[0])
 }
 
+/// The pipeline this invocation will run — the same object `plot` prints.
+fn resolve_pipeline(
+    argv: &[String],
+    cli_budget: Option<usize>,
+    use_lens: Option<&str>,
+) -> Result<ResolvedPipeline, config::ResolveError> {
+    let dirs = lens::platform::Dirs::from_env();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let config_override = std::env::var_os("LENS_CONFIG");
+    config::resolve(&ResolveInput {
+        argv,
+        cwd: &cwd,
+        dirs: &dirs,
+        config_override: config_override.as_ref(),
+        cli_budget,
+        cli_use: use_lens,
+        env_budget: budget_from_env(),
+    })
+}
+
 /// `lens show <handle> [--level N]`.
 ///
 /// Re-derives a view from stored bytes. The command is not re-executed, which is
 /// the whole point: a reader who wants more detail pays for the render, not for
 /// the run — and gets the same bytes however long ago it happened.
-fn show(args: &[String]) -> ExitCode {
+fn show(args: &[String], cli_budget: Option<usize>, use_lens: Option<String>) -> ExitCode {
     let env = Env::from_process();
 
     let mut handle_text: Option<&String> = None;
@@ -293,12 +324,19 @@ fn show(args: &[String]) -> ExitCode {
     // fate as failed (not succeeded) only affects filtering — a failing
     // command's stderr is force-kept — and the process's own exit code.
     let exit_code = meta.as_ref().map(|m| m.exit_code);
+    // argv is what selects the lens for a replay: the same command resolves to
+    // the same pipeline whether it is run or re-rendered.
+    let argv = meta.as_ref().map(|m| m.argv.clone()).unwrap_or_default();
 
     if level == ViewLevel::Raw {
         // Byte-identical to what the command produced. No parse, no re-encode:
         // this path is what makes the store's promise checkable.
         emit(&stdout, &stderr);
     } else {
+        let resolved = match resolve_pipeline(&argv, cli_budget, use_lens.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(err) => return fail(&err),
+        };
         // A stored run with no recorded exit code is treated as a failure, so
         // the floor fires and the tail is kept. Guessing success would be the
         // one guess that can hide one.
@@ -308,7 +346,7 @@ fn show(args: &[String]) -> ExitCode {
             exit_code.unwrap_or(1),
             level,
             Some(handle.as_str()),
-            budget_from_env(),
+            &resolved,
         )
         .view;
         emit(&view.stdout, &view.stderr);
@@ -353,14 +391,20 @@ fn filter(
     exit_code: i32,
     level: ViewLevel,
     handle: Option<&str>,
-    budget: Option<usize>,
+    resolved: &ResolvedPipeline,
 ) -> Filtered {
-    let ctx = Ctx { exit_code, budget, ..Ctx::default() };
-    let stages = lens::pipeline::default_stages();
+    let ctx = Ctx {
+        exit_code,
+        context_blocks: resolved.context_blocks.value,
+        budget: resolved.budget.value,
+    };
+    let stages = resolved.runnable_stages();
 
     let mut out_doc = pipeline_doc(stdout, Stream::Stdout, &stages, &ctx);
     let mut err_doc = pipeline_doc(stderr, Stream::Stderr, &stages, &ctx);
-    lens::pipeline::budget::apply(&mut [&mut out_doc, &mut err_doc], &ctx);
+    if resolved.budget.value.is_some() {
+        lens::pipeline::budget::apply(&mut [&mut out_doc, &mut err_doc], &ctx);
+    }
 
     let out = render_stream(stdout, &out_doc, level, handle);
     let err = render_stream(stderr, &err_doc, level, handle);
@@ -377,7 +421,7 @@ fn filter(
             stages: {
                 let mut names: Vec<String> =
                     stages.iter().map(|stage| stage.name().to_string()).collect();
-                if budget.is_some() {
+                if resolved.budget.value.is_some() {
                     names.push("budget".into());
                 }
                 names
@@ -467,7 +511,7 @@ fn debug_from_env() -> bool {
 /// Re-runs the pipeline against stored bytes and prints the report. The
 /// command is not re-executed; the report describes the view of a run that
 /// already happened.
-fn explain(args: &[String]) -> ExitCode {
+fn explain(args: &[String], cli_budget: Option<usize>, use_lens: Option<String>) -> ExitCode {
     let env = Env::from_process();
 
     let mut handle_text: Option<&String> = None;
@@ -500,6 +544,11 @@ fn explain(args: &[String]) -> ExitCode {
         .map(|name| name.rsplit('/').next().unwrap_or(name).to_string())
         .unwrap_or_else(|| "unknown".into());
     let dur_ms = meta.as_ref().map(|m| m.duration_ms);
+    let argv = meta.as_ref().map(|m| m.argv.clone()).unwrap_or_default();
+    let resolved = match resolve_pipeline(&argv, cli_budget, use_lens.as_deref()) {
+        Ok(resolved) => resolved,
+        Err(err) => return fail(&err),
+    };
 
     let filtered = filter(
         &stdout,
@@ -507,7 +556,7 @@ fn explain(args: &[String]) -> ExitCode {
         exit_code,
         lens::render::DEFAULT_LEVEL,
         Some(handle.as_str()),
-        budget_from_env(),
+        &resolved,
     );
     let report = lens::report::Report::from_docs(
         &[&filtered.stdout, &filtered.stderr],
@@ -624,6 +673,193 @@ fn logs(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `lens plot [--format text|json] [--handle H] [command...]`.
+///
+/// Dry mode resolves config and prints it. It never spawns the command, which
+/// is what makes `lens plot git push` safe. Trace mode (`--handle`) reads a
+/// stored run and annotates the same picture with per-stage counts.
+fn plot_cmd(args: &[String], cli_budget: Option<usize>, use_lens: Option<String>) -> ExitCode {
+    let mut format = PlotFormat::Text;
+    let mut handle_text: Option<String> = None;
+    let mut rest = args.iter();
+    let mut argv: Vec<String> = Vec::new();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--format" => match rest.next().and_then(|name| PlotFormat::parse(name)) {
+                Some(parsed) => format = parsed,
+                None => return fail(&"--format takes text or json"),
+            },
+            "--handle" => match rest.next() {
+                Some(value) => handle_text = Some(value.clone()),
+                None => return fail(&"--handle needs a handle, e.g. --handle a3f19c2b"),
+            },
+            other if other.starts_with('-') && argv.is_empty() => {
+                return fail(&format!("unknown flag `{other}` for lens plot"));
+            }
+            _ => {
+                argv.push(arg.clone());
+                argv.extend(rest.cloned());
+                break;
+            }
+        }
+    }
+
+    let boxes = want_boxes();
+
+    if let Some(text) = handle_text {
+        let env = Env::from_process();
+        let Some(handle) = lens::store::Handle::parse(&text) else {
+            return fail(&format!("`{text}` is not a handle — expected 8 hex digits"));
+        };
+        let store = Store::new(&env.store);
+        let Ok(stdout) = store.read_stream(&handle, lens::store::Stream::Stdout) else {
+            return fail(&format!("no run `{handle}` in {}", env.store.display()));
+        };
+        let stderr = store.read_stream(&handle, lens::store::Stream::Stderr).unwrap_or_default();
+        let meta = store.read_meta(&handle).ok();
+        let exit_code = meta.as_ref().map(|m| m.exit_code).unwrap_or(0);
+        let stored_argv = meta.as_ref().map(|m| m.argv.clone()).filter(|a| !a.is_empty());
+        let argv = if argv.is_empty() { stored_argv.unwrap_or_default() } else { argv };
+        if argv.is_empty() {
+            return fail(&"stored run has no argv to plot");
+        }
+        let resolved = match resolve_pipeline(&argv, cli_budget, use_lens.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(err) => return fail(&err),
+        };
+        print!("{}", plot::trace(&resolved, &stdout, &stderr, exit_code, format, boxes));
+        return ExitCode::SUCCESS;
+    }
+
+    if argv.is_empty() {
+        return fail(&"lens plot needs a command, e.g. lens plot git diff");
+    }
+    let resolved = match resolve_pipeline(&argv, cli_budget, use_lens.as_deref()) {
+        Ok(resolved) => resolved,
+        Err(err) => return fail(&err),
+    };
+    print!("{}", plot::dry(&resolved, format, boxes));
+    ExitCode::SUCCESS
+}
+
+/// Box-drawing only on a TTY whose TERM is not `dumb`. Tests and pipes get ASCII.
+fn want_boxes() -> bool {
+    #[cfg(unix)]
+    {
+        lens::platform::is_tty(lens::platform::STDOUT_FD)
+            && std::env::var_os("TERM").is_some_and(|term| term != "dumb")
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// `lens lenses [--show NAME]`.
+fn lenses_cmd(args: &[String]) -> ExitCode {
+    let mut show: Option<String> = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--show" => match rest.next() {
+                Some(name) => show = Some(name.clone()),
+                None => return fail(&"--show needs a lens name"),
+            },
+            other if other.starts_with('-') => {
+                return fail(&format!("unknown flag `{other}` for lens lenses"));
+            }
+            other => show = Some(other.to_string()),
+        }
+    }
+
+    let dirs = lens::platform::Dirs::from_env();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let config_override = std::env::var_os("LENS_CONFIG");
+    let dummy = vec!["true".into()];
+    let input = ResolveInput {
+        argv: &dummy,
+        cwd: &cwd,
+        dirs: &dirs,
+        config_override: config_override.as_ref(),
+        cli_budget: None,
+        cli_use: None,
+        env_budget: None,
+    };
+    let listed = config::list(&input);
+
+    if let Some(name) = show {
+        let Some((found, source, match_on)) = listed.iter().find(|(n, _, _)| n == &name) else {
+            return fail(&format!("no lens named `{name}` — try: lens lenses"));
+        };
+        println!("{found}");
+        println!("  source   {}", source.label());
+        match match_on {
+            Some(pat) => println!("  match    {pat}"),
+            None => println!("  match    (none)"),
+        }
+        match resolve_pipeline(&dummy, None, Some(found)) {
+            Ok(resolved) => {
+                println!("  adapter  {}", resolved.adapter.value);
+                match resolved.budget.value {
+                    Some(n) => println!("  budget   {n}"),
+                    None => println!("  budget   none"),
+                }
+                println!("  stages   {}", resolved.stages.value.join(", "));
+            }
+            Err(err) => return fail(&err),
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    for (name, source, match_on) in listed {
+        let pat = match_on.as_deref().unwrap_or("-");
+        println!("{name:<16} {pat:<20} {}", source.label());
+    }
+    ExitCode::SUCCESS
+}
+
+/// `lens config [--path] [command...]`.
+fn config_cmd(args: &[String], cli_budget: Option<usize>, use_lens: Option<String>) -> ExitCode {
+    let mut path_only = false;
+    let mut rest = args.iter();
+    let mut argv: Vec<String> = Vec::new();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--path" => path_only = true,
+            "--show" => {}
+            other if other.starts_with('-') && argv.is_empty() => {
+                return fail(&format!("unknown flag `{other}` for lens config"));
+            }
+            _ => {
+                argv.push(arg.clone());
+                argv.extend(rest.cloned());
+                break;
+            }
+        }
+    }
+
+    if path_only {
+        let dirs = lens::platform::Dirs::from_env();
+        let config_override = std::env::var_os("LENS_CONFIG");
+        println!("{}", dirs.config_file(config_override.as_ref()).display());
+        return ExitCode::SUCCESS;
+    }
+
+    if argv.is_empty() {
+        argv.push("true".into());
+    }
+    match resolve_pipeline(&argv, cli_budget, use_lens.as_deref()) {
+        Ok(resolved) => match serde_json::to_string_pretty(&resolved) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(_) => fail(&"could not serialize resolved config"),
+        },
+        Err(err) => fail(&err),
+    }
+}
+
 /// Replace this process with the child.
 ///
 /// Byte-identical to running the command directly, because after this point the
@@ -707,13 +943,16 @@ fn help_text() -> String {
         "lens {version} — run a command, keep its full output, show the view worth reading
 
 usage:
-  lens [--budget N] <command> [args...]
+  lens [--budget N] [--use NAME] <command> [args...]
                                 run a command and filter its output
   lens --version
   lens --help
   lens show <handle> [--level N]  re-derive a view without re-running it
   lens explain <handle>         filtering report for a past run
   lens stats [--since 7d] [--cmd git]
+  lens plot [--format text|json] [--handle H] <command> [args...]
+  lens lenses [--show NAME]
+  lens config [--path] [command...]
   lens logs [--tail N] [--level warn]
 
 lens flags go before the command name. Everything after it belongs to the
@@ -727,8 +966,7 @@ environment:
   LENS_LOG=<level>              off error warn info debug trace (default info)
   LENS_STORE=<dir>              where runs are kept
   LENS_LOG_DIR=<dir>            where logs are kept
-
-not implemented yet: plot, lenses, config
+  LENS_CONFIG=<file>            override the user config file
 ",
         version = env!("CARGO_PKG_VERSION")
     )
@@ -761,5 +999,7 @@ mod tests {
         let help = help_text();
         assert!(help.contains("before the command name"));
         assert!(help.contains("LENS_MODE=raw"));
+        assert!(help.contains("lens plot"));
+        assert!(!help.contains("not implemented"));
     }
 }
