@@ -64,6 +64,40 @@ pub fn exec(cmd: &mut Command) -> std::io::Error {
     cmd.exec()
 }
 
+/// The outcome of [`passthrough`].
+pub enum Passthrough {
+    /// The child could not be started at all — `cmd.exec()` failed on Unix, or
+    /// `cmd.spawn()` failed on the imitation fallback below.
+    FailedToStart(std::io::Error),
+    /// Non-Unix only: there is no process-image replacement to fall back to,
+    /// so the child was spawned and waited on instead, and this is how it
+    /// exited.
+    Completed(std::process::ExitStatus),
+}
+
+/// Run `cmd` in place of this process, on whatever platform allows that.
+///
+/// On Unix this really does replace the process image via [`exec`]; a caller
+/// distinguishing "started fine" from "failed to start" needs nothing beyond
+/// the `Err` case, because success never returns. No target this tree
+/// verifies lacks `exec`, so the non-Unix branch is unverified by the same
+/// decision that leaves the rest of that platform unverified — see the module
+/// docs. It spawns and waits, which is an imitation of passthrough rather than
+/// passthrough itself, but it is the only thing available without an `exec`.
+#[cfg(unix)]
+pub fn passthrough(cmd: &mut Command) -> Passthrough {
+    Passthrough::FailedToStart(exec(cmd))
+}
+
+/// See the Unix version of [`passthrough`] for the contract.
+#[cfg(not(unix))]
+pub fn passthrough(cmd: &mut Command) -> Passthrough {
+    match cmd.status() {
+        Ok(status) => Passthrough::Completed(status),
+        Err(err) => Passthrough::FailedToStart(err),
+    }
+}
+
 /// Is `fd` a terminal?
 ///
 /// Used to decide whether a child may take over the terminal. A wrong answer

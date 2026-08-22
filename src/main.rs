@@ -17,7 +17,21 @@ use lens::store::Store;
 use lens::tokens::{Heuristic, TokenEstimator};
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+
+    // `cli::parse` needs every token as `String`, and `std::env::args()` gets
+    // there by panicking on the first argument that is not valid UTF-8 — a
+    // Lens failure standing in for the user's command. `cli::parse` only ever
+    // makes a Lens-level decision from the first token (every later token is
+    // either a subcommand's or the child's, and reaches it verbatim), so a
+    // non-UTF-8 byte anywhere is doubt about how to interpret this line, not
+    // doubt about whether to run it. Invariant 6 resolves that toward running
+    // it exactly as given.
+    let Some(args): Option<Vec<String>> =
+        raw_args.iter().map(|a| a.to_str().map(str::to_string)).collect()
+    else {
+        return exec_raw(&raw_args);
+    };
 
     let invocation = match lens::cli::parse(args) {
         Ok(invocation) => invocation,
@@ -252,20 +266,34 @@ fn show(args: &[String]) -> ExitCode {
     };
     let stderr = store.read_stream(&handle, lens::store::Stream::Stderr).unwrap_or_default();
     let meta = store.read_meta(&handle).ok();
-    let exit_code = meta.as_ref().map(|m| m.exit_code).unwrap_or(0);
+    // `meta.json` can be missing from a run interrupted mid-write (store.rs
+    // documents that a partial entry is possible). Defaulting to 0 there would
+    // report success for a run whose fate is unrecorded — the exact lie this
+    // tool exists to prevent, now on the replay path. The streams are still
+    // retrievable regardless, so the view is still shown; treating an unknown
+    // fate as failed (not succeeded) only affects filtering — a failing
+    // command's stderr is force-kept — and the process's own exit code.
+    let exit_code = meta.as_ref().map(|m| m.exit_code);
 
     if level == ViewLevel::Raw {
         // Byte-identical to what the command produced. No parse, no re-encode:
         // this path is what makes the store's promise checkable.
         emit(&stdout, &stderr);
     } else {
-        let view = filter(&stdout, &stderr, exit_code, level, Some(handle.as_str()));
+        let view = filter(&stdout, &stderr, exit_code.unwrap_or(1), level, Some(handle.as_str()));
         emit(&view.stdout, &view.stderr);
     }
 
-    // Reading a run is not running it, but reporting success for a run that
-    // failed would be a lie, so the stored code is what this exits with.
-    exit_with(exit_code)
+    match exit_code {
+        // Reading a run is not running it, but reporting success for a run
+        // that failed would be a lie, so the stored code is what this exits
+        // with.
+        Some(code) => exit_with(code),
+        None => {
+            eprintln!("lens: run `{handle}` has no recorded exit code — treating as failed");
+            exit_with(1)
+        }
+    }
 }
 
 /// A rendered view of both streams, and what it cost.
@@ -472,24 +500,40 @@ fn logs(args: &[String]) -> ExitCode {
 fn passthrough(argv: &[String]) -> ExitCode {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
+    exec_or_report(cmd, &argv[0])
+}
 
-    #[cfg(unix)]
-    {
-        let err = lens::platform::exec(&mut cmd);
-        // exec only returns on failure. A command that could not be started is
-        // the shell's classic 127.
-        eprintln!("lens: {}: {err}", argv[0]);
-        ExitCode::from(127)
-    }
+/// Run a command line that never went through `cli::parse`, because a
+/// non-UTF-8 byte in it made that impossible.
+///
+/// Everything Lens's own store and log would record about a run is
+/// `String`-typed, so there is no faithful way to write a record for this one
+/// either — the command still runs, it is simply not captured or filtered.
+/// That trade is invariant 6 in the one case it forces: doubt about how to
+/// represent a command line is not a reason to refuse to run it.
+fn exec_raw(argv: &[std::ffi::OsString]) -> ExitCode {
+    let Some(program) = argv.first() else {
+        // Unreachable: an empty `argv` decodes to an empty (valid) Vec<String>
+        // above and never reaches this function.
+        return fail(&"lens: no command");
+    };
+    let mut cmd = Command::new(program);
+    cmd.args(&argv[1..]);
+    exec_or_report(cmd, program.to_string_lossy().as_ref())
+}
 
-    #[cfg(not(unix))]
-    {
-        match cmd.status() {
-            Ok(status) => exit_with(lens::platform::exit_code_for_status(&status)),
-            Err(err) => {
-                eprintln!("lens: {}: {err}", argv[0]);
-                ExitCode::from(127)
-            }
+/// Hand `cmd` to the platform's passthrough and turn the outcome into an
+/// [`ExitCode`], reporting `name` if it could not be started.
+fn exec_or_report(mut cmd: Command, name: &str) -> ExitCode {
+    match lens::platform::passthrough(&mut cmd) {
+        lens::platform::Passthrough::Completed(status) => {
+            exit_with(lens::platform::exit_code_for_status(&status))
+        }
+        lens::platform::Passthrough::FailedToStart(err) => {
+            // exec only returns on failure. A command that could not be
+            // started is the shell's classic 127.
+            eprintln!("lens: {name}: {err}");
+            ExitCode::from(127)
         }
     }
 }
