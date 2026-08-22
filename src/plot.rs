@@ -148,8 +148,8 @@ fn collect_trace(
         context_blocks: resolved.context_blocks.value,
         budget: resolved.budget.value,
     };
-    let mut out_doc = parse_stream(stdout, Stream::Stdout);
-    let mut err_doc = parse_stream(stderr, Stream::Stderr);
+    let mut out_doc = parse_stream(stdout, Stream::Stdout, &resolved.adapter.value);
+    let mut err_doc = parse_stream(stderr, Stream::Stderr, &resolved.adapter.value);
     let estimator = Heuristic;
     let mut steps = Vec::new();
 
@@ -218,11 +218,11 @@ fn trace_text(
     out
 }
 
-fn parse_stream(raw: &[u8], stream: Stream) -> Doc {
+fn parse_stream(raw: &[u8], stream: Stream, adapter: &str) -> Doc {
     if std::str::from_utf8(raw).is_err() {
         return Doc::empty(stream);
     }
-    crate::adapters::parse(raw, stream)
+    crate::adapters::parse_with(raw, stream, adapter).0
 }
 
 fn out_text(doc: &Doc) -> String {
@@ -271,6 +271,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["lens"]["value"], "git");
         assert_eq!(v["budget"]["value"], 4000);
+        assert_eq!(v["adapter"]["value"], "git");
     }
 
     #[test]
