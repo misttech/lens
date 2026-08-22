@@ -22,6 +22,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
+      # Repository tooling is Python, and make check lints it.
+      - run: pipx install ruff
       - run: make check
       - run: make test
       # Growth only. The committed latency baseline was recorded elsewhere, and
@@ -44,5 +46,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
+      - run: pipx install ruff
       - run: make check
       - run: make test

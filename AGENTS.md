@@ -15,6 +15,12 @@ itself.
   sound. Unsafe is confined to `src/platform.rs`.
 - **Layout and ABI assumptions are asserted at compile time**, with
   `static_assert!`, not documented in prose and not left to a test.
+- **Never write down an account's usage state.** Spend to date, remaining quota,
+  rate-limit messages, plan tier, reset dates: none of it belongs in a commit
+  message, a pull request, a results file, or a comment. It says nothing about
+  the code, it is stale within days, and it is nobody's business outside the
+  account. When a run is blocked by one, say the run was blocked and why it
+  matters to the result — not what the provider said about the account.
 - **Linear history.** `main` is rebase merged; squash and merge commits are
   disabled. Every commit lands individually, so every commit builds, passes
   tests, and carries a message worth keeping. See
@@ -84,6 +90,52 @@ recorded fixtures in `tests/fixtures/`. Two checks, and only one of them gates:
 
 The library exists so the benchmark can measure the pipeline directly. The
 binary is a thin caller over it.
+
+`bench/runner.py` is the retention benchmark: for every (task, variant, repeat)
+it starts from a clean directory, runs a real agent against a real command, and
+asks a script whether the work was done. Success is mechanically verifiable — no
+model judges another model's work. It prints its plan and spends nothing unless
+given `--run`, because a benchmark that can charge you by accident is one nobody
+runs twice.
+
+The number it exists to produce is the knee: where task success starts to fall.
+A run reporting 90% fewer tokens and 60% success is a worse tool than one
+reporting 70% fewer and 100%.
+
+### What the first baseline says
+
+`bench/results/retention-baseline.json`, three tasks against Sonnet 5, three runs
+per cell: **task success is 100% everywhere, and filtering costs more total model
+tokens than not filtering** in eight of nine cells — from 0.98x to 1.72x the raw
+control. Only one cell wins.
+
+The cause is in the tool, not the tasks. Traced with a real run: the agent runs
+the filtered command, reads the marker, and then runs `lens show <handle>
+--level 3`, which hands back the entire raw output. It pays for both views and an
+extra turn, and the 99.8% reduction on the way in buys nothing.
+
+So the marker is doing something the design did not intend. It reads as an
+instruction rather than an offer, and the level it names is the most expensive
+one there is. Whatever replaces it has to make asking for more a decision the
+reader takes deliberately, not the obvious next step — and the retention curve is
+how the replacement gets judged.
+
+This is the harness working. The compression looked excellent and the thing that
+matters was going the wrong way.
+
+### The same curve, a different agent
+
+`bench/results/retention-cursor.json` runs the identical cells through a
+different agent and a different model family. Success is again 100% everywhere,
+and the token picture is not the same one: two of nine cells beat the control on
+one agent, four of nine on the other, and they disagree about which. On the trap
+task, level 2 costs 1.25x on one and 0.73x on the other.
+
+So a single-agent curve measures the agent's habits as much as the filter's
+quality — how readily it chases a marker, how much it re-reads. Any claim about
+this tool that rests on one agent's numbers is a claim about that agent. Both
+files are committed for that reason, and a change to ranking or to the marker is
+judged against both.
 
 ## Platform
 
