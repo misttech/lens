@@ -41,7 +41,10 @@ impl Sandbox {
     /// The same, with extra environment.
     fn lens_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut cmd = Command::new(lens_bin());
-        cmd.args(args).env("LENS_STORE", self.store()).env("LENS_LOG_DIR", self.logs());
+        cmd.args(args)
+            .env("LENS_STORE", self.store())
+            .env("LENS_LOG_DIR", self.logs())
+            .env("LENS_CONFIG", self.root.join("config.toml"));
         for (key, value) in env {
             cmd.env(key, value);
         }
