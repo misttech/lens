@@ -207,6 +207,7 @@ mod tests {
                 super::super::Line { text: "error: boom".into(), origin: 2 },
             ])],
             source: super::super::Stream::Stdout,
+            budget_exceeded: false,
         };
         Progress.apply(&mut doc, &Ctx::default());
         assert!(doc.blocks[0].kept());

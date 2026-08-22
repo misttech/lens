@@ -140,9 +140,11 @@ fn anything_left_out_is_announced() {
 }
 
 #[test]
-fn a_marker_carries_a_handle_that_resolves() {
-    // Both halves of the announcement, checked end to end: the marker names a
-    // handle, and that handle produces the full output.
+fn a_marker_names_a_handle_but_not_a_command() {
+    // Both halves of the announcement: the marker names a handle that resolves,
+    // and does not tell the reader to go and fetch everything with it. An agent
+    // shown `lens show <handle> --level 3` followed it and pulled the entire raw
+    // output, which costs more than not filtering at all.
     let sandbox = Sandbox::new("marker-handle");
     let (out, _) = sandbox.run_script(NOISY);
 
@@ -154,8 +156,12 @@ fn a_marker_carries_a_handle_that_resolves() {
 
     let handle = marker
         .split_whitespace()
+        .map(|word| word.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
         .find(|word| word.len() == 8 && word.bytes().all(|b| b.is_ascii_hexdigit()))
         .expect("a handle in the marker");
+
+    assert!(!marker.contains("lens show"), "a marker offers, it does not instruct: {marker}");
+    assert!(!marker.contains("--level"), "{marker}");
 
     let raw = sandbox.lens(&["show", handle, "--level", "3"]);
     assert_eq!(raw.status.code(), Some(0));
@@ -334,4 +340,55 @@ fn empty_output_stays_empty() {
     let out = sandbox.lens(&["sh", "-c", "true"]);
     assert!(out.stdout.is_empty());
     assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn a_budget_drops_ordinary_output_and_keeps_the_failure() {
+    let sandbox = Sandbox::new("budget-keeps-error");
+    // Blank lines make one block per line, so the failure floor (which force-
+    // keeps the tail of a failing stdout) cannot rescue the whole stream.
+    let script = r#"
+for i in $(seq 1 80); do printf 'ordinary line %s of filler text for the budget\n\n' "$i"; done
+echo 'error[E0308]: mismatched types' >&2
+exit 1
+"#;
+    let out = sandbox.lens(&["--budget", "40", "sh", "-c", script]);
+    assert_eq!(out.status.code(), Some(1));
+    let combined = format!("{}{}", text(&out.stdout), text(&out.stderr));
+    assert!(combined.contains("E0308"), "the failure vanished:\n{combined}");
+    assert!(has_marker(&combined), "the budget has to announce what it dropped:\n{combined}");
+    assert!(
+        text(&out.stdout).matches("ordinary line").count() < 80,
+        "the budget left every ordinary line in place:\n{}",
+        text(&out.stdout)
+    );
+}
+
+#[test]
+fn debug_report_arrives_after_the_child() {
+    let sandbox = Sandbox::new("debug-report");
+    let out = sandbox.lens_with(
+        &["sh", "-c", "echo 'hello from the child'; echo 'error: boom' >&2; exit 1"],
+        &[("LENS_DEBUG", "1")],
+    );
+    let stdout = text(&out.stdout);
+    let stderr = text(&out.stderr);
+    assert!(stdout.contains("hello from the child"), "{stdout}");
+    assert!(stderr.contains("error: boom"), "{stderr}");
+    let report_at = stderr.find("lens report").unwrap_or_else(|| panic!("no report in {stderr}"));
+    let child_at = stderr.find("error: boom").unwrap();
+    assert!(child_at < report_at, "the report mixed into the child's stderr:\n{stderr}");
+    assert!(stderr.contains("removed by stage") || stderr.contains("preserved"), "{stderr}");
+}
+
+#[test]
+fn explain_prints_the_report_for_a_stored_run() {
+    let sandbox = Sandbox::new("explain");
+    let (_, handle) = sandbox.run_script(NOISY);
+    let out = sandbox.lens(&["explain", &handle]);
+    assert_eq!(out.status.code(), Some(0));
+    let report = text(&out.stdout);
+    assert!(report.contains("lens report"), "{report}");
+    assert!(report.contains(&handle), "{report}");
+    assert!(report.contains("removed by stage"), "{report}");
 }

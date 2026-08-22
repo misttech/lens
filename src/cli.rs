@@ -22,6 +22,12 @@ pub enum Invocation {
     Run {
         /// The child's argv, starting with the command name. Never empty.
         argv: Vec<String>,
+        /// Token budget for this invocation, from `--budget`.
+        ///
+        /// `None` here does not mean "no budget": `LENS_BUDGET` is read later,
+        /// by the process that actually filters. The parser only reports what
+        /// the command line said.
+        budget: Option<usize>,
     },
     /// One of Lens's own subcommands, with its arguments unparsed.
     Subcommand {
@@ -98,6 +104,10 @@ impl fmt::Display for Subcommand {
 pub enum CliError {
     /// A flag before the command name that Lens does not recognize.
     UnknownFlag(String),
+    /// A flag that takes a value was given without one.
+    FlagNeedsValue(String),
+    /// `--budget` was given a value that is not a token count.
+    InvalidBudget(String),
 }
 
 impl fmt::Display for CliError {
@@ -109,6 +119,12 @@ impl fmt::Display for CliError {
                  lens flags go before the command name; everything after it belongs to the child.\n\
                  try: lens --help"
             ),
+            CliError::FlagNeedsValue(flag) => {
+                write!(f, "`{flag}` needs a value, e.g. {flag} 2000")
+            }
+            CliError::InvalidBudget(value) => {
+                write!(f, "`{value}` is not a token budget — expected a number")
+            }
         }
     }
 }
@@ -130,18 +146,27 @@ where
     S: Into<String>,
 {
     let mut rest = args.into_iter().map(Into::into).peekable();
+    let mut budget = None;
 
     // Lens's own flags, which may only appear before the command name. The set
     // is small on purpose: a flag added here is a token that can no longer
-    // start a child command line without ambiguity. Every flag Lens currently
-    // has terminates parsing, so one leading flag is all there is to read.
-    if rest.peek().is_some_and(|token| is_flag(token)) {
+    // start a child command line without ambiguity.
+    while rest.peek().is_some_and(|token| is_flag(token)) {
         let flag = rest.next().expect("peeked");
-        return match flag.as_str() {
-            "-h" | "--help" => Ok(Invocation::Help),
-            "-V" | "--version" => Ok(Invocation::Version),
-            other => Err(CliError::UnknownFlag(other.to_string())),
-        };
+        match flag.as_str() {
+            "-h" | "--help" => return Ok(Invocation::Help),
+            "-V" | "--version" => return Ok(Invocation::Version),
+            "--budget" => {
+                let Some(value) = rest.next() else {
+                    return Err(CliError::FlagNeedsValue("--budget".into()));
+                };
+                match value.parse::<usize>() {
+                    Ok(n) => budget = Some(n),
+                    Err(_) => return Err(CliError::InvalidBudget(value)),
+                }
+            }
+            other => return Err(CliError::UnknownFlag(other.to_string())),
+        }
     }
 
     let Some(first) = rest.next() else {
@@ -158,7 +183,7 @@ where
     let mut argv = Vec::new();
     argv.push(first);
     argv.extend(rest);
-    Ok(Invocation::Run { argv })
+    Ok(Invocation::Run { argv, budget })
 }
 
 /// Is this token a flag rather than a command name?
@@ -175,7 +200,7 @@ mod tests {
 
     fn run_argv(args: &[&str]) -> Vec<String> {
         match parse(args.to_vec()) {
-            Ok(Invocation::Run { argv }) => argv,
+            Ok(Invocation::Run { argv, .. }) => argv,
             other => panic!("expected Run, got {other:?}"),
         }
     }
@@ -245,14 +270,34 @@ mod tests {
     }
 
     #[test]
-    fn unknown_lens_flag_is_an_error_not_a_command() {
-        // Silently treating it as a command would try to execute `--budget`.
+    fn a_budget_flag_before_the_command_is_ours() {
+        match parse(vec!["--budget", "500", "git", "diff"]) {
+            Ok(Invocation::Run { argv, budget }) => {
+                assert_eq!(argv, vec!["git", "diff"]);
+                assert_eq!(budget, Some(500));
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_budget_flag_needs_a_number() {
+        assert_eq!(parse(vec!["--budget"]), Err(CliError::FlagNeedsValue("--budget".into())));
         assert_eq!(
-            parse(vec!["--budget", "500", "git", "diff"]),
-            Err(CliError::UnknownFlag("--budget".into()))
+            parse(vec!["--budget", "plenty", "true"]),
+            Err(CliError::InvalidBudget("plenty".into()))
+        );
+    }
+
+    #[test]
+    fn unknown_lens_flag_is_an_error_not_a_command() {
+        // Silently treating it as a command would try to execute `--not-a-flag`.
+        assert_eq!(
+            parse(vec!["--not-a-flag", "git", "diff"]),
+            Err(CliError::UnknownFlag("--not-a-flag".into()))
         );
         assert!(
-            CliError::UnknownFlag("--budget".into()).to_string().contains("before the command")
+            CliError::UnknownFlag("--not-a-flag".into()).to_string().contains("before the command")
         );
     }
 
