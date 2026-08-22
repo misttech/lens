@@ -67,6 +67,10 @@ of budget.
 * Wrap body lines at ~72 characters.
 * The body is optional if the subject fully explains the change.
 * Don't reference private URLs, individuals, secrets, or relative points in time.
+* Don't include agent session identifiers. `Claude-Session:`, a
+  `claude.ai/code/session/…` URL, or any other handle that names a
+  private coding session is account state, not a description of the
+  change. A commit is public history; a session is not.
 
 ### Two project-specific rules
 
