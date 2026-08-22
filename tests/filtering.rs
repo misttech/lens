@@ -341,3 +341,54 @@ fn empty_output_stays_empty() {
     assert!(out.stdout.is_empty());
     assert!(out.stderr.is_empty());
 }
+
+#[test]
+fn a_budget_drops_ordinary_output_and_keeps_the_failure() {
+    let sandbox = Sandbox::new("budget-keeps-error");
+    // Blank lines make one block per line, so the failure floor (which force-
+    // keeps the tail of a failing stdout) cannot rescue the whole stream.
+    let script = r#"
+for i in $(seq 1 80); do printf 'ordinary line %s of filler text for the budget\n\n' "$i"; done
+echo 'error[E0308]: mismatched types' >&2
+exit 1
+"#;
+    let out = sandbox.lens(&["--budget", "40", "sh", "-c", script]);
+    assert_eq!(out.status.code(), Some(1));
+    let combined = format!("{}{}", text(&out.stdout), text(&out.stderr));
+    assert!(combined.contains("E0308"), "the failure vanished:\n{combined}");
+    assert!(has_marker(&combined), "the budget has to announce what it dropped:\n{combined}");
+    assert!(
+        text(&out.stdout).matches("ordinary line").count() < 80,
+        "the budget left every ordinary line in place:\n{}",
+        text(&out.stdout)
+    );
+}
+
+#[test]
+fn debug_report_arrives_after_the_child() {
+    let sandbox = Sandbox::new("debug-report");
+    let out = sandbox.lens_with(
+        &["sh", "-c", "echo 'hello from the child'; echo 'error: boom' >&2; exit 1"],
+        &[("LENS_DEBUG", "1")],
+    );
+    let stdout = text(&out.stdout);
+    let stderr = text(&out.stderr);
+    assert!(stdout.contains("hello from the child"), "{stdout}");
+    assert!(stderr.contains("error: boom"), "{stderr}");
+    let report_at = stderr.find("lens report").unwrap_or_else(|| panic!("no report in {stderr}"));
+    let child_at = stderr.find("error: boom").unwrap();
+    assert!(child_at < report_at, "the report mixed into the child's stderr:\n{stderr}");
+    assert!(stderr.contains("removed by stage") || stderr.contains("preserved"), "{stderr}");
+}
+
+#[test]
+fn explain_prints_the_report_for_a_stored_run() {
+    let sandbox = Sandbox::new("explain");
+    let (_, handle) = sandbox.run_script(NOISY);
+    let out = sandbox.lens(&["explain", &handle]);
+    assert_eq!(out.status.code(), Some(0));
+    let report = text(&out.stdout);
+    assert!(report.contains("lens report"), "{report}");
+    assert!(report.contains(&handle), "{report}");
+    assert!(report.contains("removed by stage"), "{report}");
+}
