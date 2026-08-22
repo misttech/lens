@@ -88,7 +88,10 @@ fn summary(doc: &Doc, handle: Option<&str>) -> String {
 
     if doc.line_count() > 0 {
         out.push('\n');
-        out.push_str(&marker(doc.line_count(), "level 0 shows counts only", handle, 1));
+        let mut all =
+            Pending { lines: doc.line_count(), blocks: doc.blocks.len(), ..Default::default() };
+        all.reason = Some("this view is counts only");
+        out.push_str(&marker(&all, handle));
         out.push('\n');
     }
     out
@@ -101,24 +104,21 @@ fn summary(doc: &Doc, handle: Option<&str>) -> String {
 /// a marker in position says what it was between.
 fn body(doc: &Doc, handle: Option<&str>, failures_only: bool) -> String {
     let mut out = String::new();
-    let mut pending_lines = 0usize;
-    let mut pending_blocks = 0usize;
+    let mut pending = Pending::default();
     let mut wrote_anything = false;
 
     for block in &doc.blocks {
         let show = block.kept() && !(failures_only && !is_failure(block.class));
 
         if !show {
-            pending_lines += block.lines.len();
-            pending_blocks += 1;
+            pending.add(block);
             continue;
         }
 
-        if pending_lines > 0 {
-            out.push_str(&marker(pending_lines, "filtered", handle, pending_blocks));
+        if pending.lines > 0 {
+            out.push_str(&marker(&pending, handle));
             out.push('\n');
-            pending_lines = 0;
-            pending_blocks = 0;
+            pending = Pending::default();
         }
 
         for line in &block.lines {
@@ -128,24 +128,51 @@ fn body(doc: &Doc, handle: Option<&str>, failures_only: bool) -> String {
         wrote_anything = true;
     }
 
-    if pending_lines > 0 {
+    if pending.lines > 0 {
         // Trailing elisions are announced too. A view that ends early without
         // saying so is exactly the failure this tool exists to avoid.
-        out.push_str(&marker(pending_lines, "filtered", handle, pending_blocks));
+        out.push_str(&marker(&pending, handle));
         out.push('\n');
     }
 
     if !wrote_anything && out.is_empty() && doc.line_count() > 0 {
-        out.push_str(&marker(
-            doc.line_count(),
-            "nothing matched this view",
-            handle,
-            doc.blocks.len(),
-        ));
+        let mut all = Pending::default();
+        for block in &doc.blocks {
+            all.add(block);
+        }
+        all.reason = Some("nothing in this view");
+        out.push_str(&marker(&all, handle));
         out.push('\n');
     }
 
     out
+}
+
+/// A run of blocks the view is leaving out, and why.
+#[derive(Default)]
+struct Pending {
+    lines: usize,
+    blocks: usize,
+    /// The single reason every block in the run shares, if they share one.
+    reason: Option<&'static str>,
+    mixed: bool,
+}
+
+impl Pending {
+    fn add(&mut self, block: &crate::pipeline::Block) {
+        self.lines += block.lines.len();
+        self.blocks += 1;
+
+        let reason = block.elided.as_ref().map(|e| e.reason);
+        match (self.reason, reason) {
+            (None, Some(r)) if !self.mixed => self.reason = Some(r),
+            (Some(existing), Some(r)) if existing != r => {
+                self.reason = None;
+                self.mixed = true;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A single elision marker.
@@ -153,16 +180,40 @@ fn body(doc: &Doc, handle: Option<&str>, failures_only: bool) -> String {
 /// One line, bracketed, prefixed `[lens:`. Anything that pipes filtered output
 /// into a parser fails loudly on this line rather than silently processing a
 /// truncated stream, which is the second reason it exists.
-fn marker(lines: usize, reason: &str, handle: Option<&str>, blocks: usize) -> String {
-    let what = if blocks > 1 {
-        format!("{lines} lines in {blocks} blocks outside this view")
-    } else {
-        format!("{lines} line{} outside this view", if lines == 1 { "" } else { "s" })
-    };
-
+///
+/// It names the handle and **does not name a command**. The first version ended
+/// with `lens show <handle> --level 3`, and the retention benchmark showed
+/// agents reading that as the next step and taking it — fetching the entire raw
+/// output, paying for both views and an extra turn, and undoing the filtering
+/// completely. A marker's job is to say what is missing well enough that the
+/// reader can tell whether it needs it; an instruction to fetch everything
+/// answers that question for them, and answers it wrong.
+///
+/// So the text describes the content rather than offering a command. "1,199
+/// further repetitions of the block above" is a reason not to ask.
+fn marker(pending: &Pending, handle: Option<&str>) -> String {
+    let what = describe(pending);
     match handle {
-        Some(handle) => format!("[lens: {what} · {reason} · lens show {handle} --level 3]"),
-        None => format!("[lens: {what} · {reason}]"),
+        Some(handle) => format!("[lens: {what} · handle {handle}]"),
+        None => format!("[lens: {what}]"),
+    }
+}
+
+/// What was left out, in terms of what it was.
+fn describe(pending: &Pending) -> String {
+    let lines = pending.lines;
+    let plural = if lines == 1 { "" } else { "s" };
+
+    // "not shown" rather than "removed": the content is outside this view, not
+    // gone, and the wording is the only place most readers meet that claim.
+    match pending.reason {
+        Some("dedupe") => format!("{lines} further repeated line{plural} not shown"),
+        Some("progress") => format!("{lines} progress line{plural} not shown"),
+        Some(other) => format!("{lines} line{plural} not shown · {other}"),
+        None if pending.blocks > 1 => {
+            format!("{lines} line{plural} in {} blocks not shown", pending.blocks)
+        }
+        None => format!("{lines} line{plural} not shown"),
     }
 }
 
@@ -220,15 +271,29 @@ mod tests {
     }
 
     #[test]
+    fn a_marker_says_what_kind_of_content_is_missing() {
+        // Enough for the reader to decide it does not need the rest. "1,199
+        // further repeated lines" is a reason not to ask; "1,199 lines" is not.
+        let d = filtered("kept\n\nsame\nsame\nsame\nsame\n", 0);
+        let out = render(&d, Level::Detail, Some("h"));
+        let line = out.lines().find(|l| l.starts_with("[lens:")).expect("a marker");
+        assert!(line.contains("repeated"), "{line}");
+    }
+
+    #[test]
     fn a_marker_carries_the_handle_and_the_count() {
         // Both halves of the announcement: that content exists, and how to get
         // it. Either alone is useless.
         let d = filtered("   Compiling a v1.0\n\n   Compiling b v1.0\n\nkept\n", 0);
         let out = render(&d, Level::Detail, Some("a3f19c2b"));
         let line = out.lines().find(|l| l.starts_with("[lens:")).expect("a marker");
-        assert!(line.contains("a3f19c2b"), "{line}");
-        assert!(line.contains("lens show"), "{line}");
+        assert!(line.contains("a3f19c2b"), "the handle: {line}");
         assert!(line.contains('2'), "the line count: {line}");
+        // No command. An agent reading `lens show <handle> --level 3` here took
+        // it as the next step and fetched the entire raw output, which is the
+        // one outcome filtering exists to avoid.
+        assert!(!line.contains("lens show"), "a marker offers, it does not instruct: {line}");
+        assert!(!line.contains("--level"), "{line}");
     }
 
     #[test]
@@ -237,8 +302,8 @@ mod tests {
         let d = filtered("   Compiling foo v1.0\n\nkept\n", 0);
         let out = render(&d, Level::Detail, Some("h"));
         let line = out.lines().find(|l| l.starts_with("[lens:")).unwrap();
-        assert!(line.contains("outside this view"), "{line}");
-        for word in ["deleted", "removed", "truncated", "discarded"] {
+        assert!(line.contains("not shown"), "{line}");
+        for word in ["deleted", "removed", "truncated", "discarded", "lost"] {
             assert!(!line.contains(word), "{line} suggests loss");
         }
     }
@@ -307,7 +372,7 @@ mod tests {
         let d = filtered("   Compiling foo v1.0\n\nkept\n", 0);
         let out = render(&d, Level::Detail, None);
         assert!(has_marker(&out));
-        assert!(!out.contains("lens show"), "no handle, no instruction to follow");
+        assert!(!out.contains("handle"), "no handle, nothing to name");
     }
 
     #[test]
