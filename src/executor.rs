@@ -19,8 +19,6 @@
 
 use std::ffi::OsString;
 use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -51,7 +49,7 @@ pub fn capture(program: &std::path::Path, argv: &[String]) -> std::io::Result<Ca
     // argv[0] is the name the child sees; keep it as the user typed it rather
     // than as we resolved it, so a command that inspects its own name behaves
     // the way it would outside Lens.
-    cmd.arg0(&argv[0]);
+    crate::platform::set_arg0(&mut cmd, &argv[0]);
     cmd.args(child_args(argv));
     scrub_env(&mut cmd);
     quiet_git(&mut cmd, argv);

@@ -258,18 +258,7 @@ fn find_program(command: &str, path_var: Option<&OsString>, lens_exe: Option<&Pa
 /// Is this path a file we could execute?
 fn is_executable(path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(path) else { return false };
-    if !meta.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    meta.is_file() && crate::platform::is_executable(&meta)
 }
 
 /// The command name without its directory.
