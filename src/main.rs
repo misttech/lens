@@ -171,6 +171,14 @@ fn run(argv: &[String], cli_budget: Option<usize>, use_lens: Option<String>) -> 
                     &resolved,
                 );
 
+                if let Some(err) = filtered.adapter_fallback.as_deref() {
+                    logger.event(
+                        Level::Warn,
+                        "adapter parse failed, falling back to generic",
+                        &[("cmd", command_name(argv)), ("err", err)],
+                    );
+                }
+
                 logger.run(RunRecord {
                     handle: handle_str.clone(),
                     cmd: command_name(argv).to_string(),
@@ -399,9 +407,10 @@ fn filter(
         budget: resolved.budget.value,
     };
     let stages = resolved.runnable_stages();
+    let adapter = resolved.adapter.value.as_str();
 
-    let mut out_doc = pipeline_doc(stdout, Stream::Stdout, &stages, &ctx);
-    let mut err_doc = pipeline_doc(stderr, Stream::Stderr, &stages, &ctx);
+    let (mut out_doc, out_fb) = pipeline_doc(stdout, Stream::Stdout, &stages, &ctx, adapter);
+    let (mut err_doc, err_fb) = pipeline_doc(stderr, Stream::Stderr, &stages, &ctx, adapter);
     if resolved.budget.value.is_some() {
         lens::pipeline::budget::apply(&mut [&mut out_doc, &mut err_doc], &ctx);
     }
@@ -431,6 +440,7 @@ fn filter(
         },
         stdout: out_doc,
         stderr: err_doc,
+        adapter_fallback: out_fb.or(err_fb),
     }
 }
 
@@ -439,6 +449,8 @@ struct Filtered {
     view: View,
     stdout: lens::pipeline::Doc,
     stderr: lens::pipeline::Doc,
+    /// Set when the named adapter could not parse and generic ran instead.
+    adapter_fallback: Option<String>,
 }
 
 /// One filtered stream.
@@ -461,13 +473,14 @@ fn pipeline_doc(
     stream: Stream,
     stages: &[&dyn lens::pipeline::Stage],
     ctx: &Ctx,
-) -> lens::pipeline::Doc {
+    adapter: &str,
+) -> (lens::pipeline::Doc, Option<String>) {
     if std::str::from_utf8(raw).is_err() {
-        return lens::pipeline::Doc::empty(stream);
+        return (lens::pipeline::Doc::empty(stream), None);
     }
-    let mut doc = lens::adapters::parse(raw, stream);
+    let (mut doc, fallback) = lens::adapters::parse_with(raw, stream, adapter);
     lens::pipeline::run(&mut doc, stages, ctx);
-    doc
+    (doc, fallback)
 }
 
 fn render_stream(

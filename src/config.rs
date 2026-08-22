@@ -70,7 +70,7 @@ pub struct ResolvedPipeline {
     pub budget: Field<Option<usize>>,
     /// Context blocks around a failure.
     pub context_blocks: Field<usize>,
-    /// Adapter name. `"generic"` until a structured one exists for this command.
+    /// Adapter name. `"generic"` when no structured adapter applies.
     pub adapter: Field<String>,
     /// The command this was resolved for.
     pub argv: Vec<String>,
@@ -337,7 +337,7 @@ fn builtins() -> Vec<(&'static str, LensDef)> {
             LensDef {
                 match_on: Some("git".into()),
                 budget: Some(4000),
-                adapter: Some("generic".into()),
+                adapter: Some("git".into()),
                 ..LensDef::default()
             },
         ),
@@ -352,7 +352,7 @@ fn builtins() -> Vec<(&'static str, LensDef)> {
                         .map(str::to_string)
                         .collect(),
                 ),
-                adapter: Some("generic".into()),
+                adapter: Some("git".into()),
                 ..LensDef::default()
             },
         ),
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(resolved.lens.value, "git-diff");
         assert_eq!(resolved.budget.value, Some(6000));
         assert!(!resolved.stages.value.contains(&"progress".into()));
-        assert_eq!(resolved.adapter.value, "generic");
+        assert_eq!(resolved.adapter.value, "git");
         assert_eq!(resolved.lens.source, Source::Builtin);
     }
 
@@ -510,6 +510,7 @@ mod tests {
         .unwrap();
         assert_eq!(resolved.lens.value, "git");
         assert_eq!(resolved.budget.value, Some(4000));
+        assert_eq!(resolved.adapter.value, "git");
     }
 
     #[test]
