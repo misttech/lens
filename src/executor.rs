@@ -79,11 +79,15 @@ pub fn capture(program: &std::path::Path, argv: &[String]) -> std::io::Result<Ca
         buf
     });
 
-    let status = child.wait()?;
+    let status = child.wait();
+    // Both readers are joined before this function returns by any path,
+    // `wait()` failing included — otherwise a detached thread keeps the pipe
+    // it owns open, and the child can be left blocked writing into it.
     // A panicked reader thread means we lost that stream, not that the run
     // failed: report what we have rather than losing the child's exit code.
     let stdout = stdout_reader.join().unwrap_or_default();
     let stderr = stderr_reader.join().unwrap_or_default();
+    let status = status?;
 
     Ok(Captured {
         stdout,
