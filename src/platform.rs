@@ -80,6 +80,8 @@ pub fn is_tty(fd: i32) -> bool {
 
 /// Standard file descriptor numbers, as passed to [`is_tty`].
 pub const STDIN_FD: i32 = 0;
+/// Standard output, for deciding whether plot may use box-drawing.
+pub const STDOUT_FD: i32 = 1;
 
 // The one language boundary in this crate. Two libc calls, declared in-tree
 // rather than pulling in a crate for them: `isatty` for interactive detection
@@ -216,6 +218,19 @@ impl Dirs {
             Some(dir) if !dir.is_empty() => PathBuf::from(dir),
             _ => self.state.join("lens").join("logs"),
         }
+    }
+
+    /// The user config file, honoring `LENS_CONFIG`.
+    pub fn config_file(&self, override_file: Option<&OsString>) -> PathBuf {
+        match override_file {
+            Some(path) if !path.is_empty() => PathBuf::from(path),
+            _ => self.config.join("lens").join("config.toml"),
+        }
+    }
+
+    /// Directory of extra lens fragments, next to the user config file.
+    pub fn lenses_dir(&self, override_file: Option<&OsString>) -> PathBuf {
+        self.config_file(override_file).parent().unwrap_or(&self.config).join("lenses")
     }
 }
 

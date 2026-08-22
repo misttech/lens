@@ -28,6 +28,8 @@ pub enum Invocation {
         /// by the process that actually filters. The parser only reports what
         /// the command line said.
         budget: Option<usize>,
+        /// Force a named lens, from `--use`.
+        use_lens: Option<String>,
     },
     /// One of Lens's own subcommands, with its arguments unparsed.
     Subcommand {
@@ -35,6 +37,10 @@ pub enum Invocation {
         name: Subcommand,
         /// Its arguments, verbatim.
         args: Vec<String>,
+        /// `--budget` given before the subcommand name.
+        budget: Option<usize>,
+        /// `--use` given before the subcommand name.
+        use_lens: Option<String>,
     },
     /// `lens --version`.
     Version,
@@ -147,6 +153,7 @@ where
 {
     let mut rest = args.into_iter().map(Into::into).peekable();
     let mut budget = None;
+    let mut use_lens = None;
 
     // Lens's own flags, which may only appear before the command name. The set
     // is small on purpose: a flag added here is a token that can no longer
@@ -165,6 +172,12 @@ where
                     Err(_) => return Err(CliError::InvalidBudget(value)),
                 }
             }
+            "--use" => {
+                let Some(value) = rest.next() else {
+                    return Err(CliError::FlagNeedsValue("--use".into()));
+                };
+                use_lens = Some(value);
+            }
             other => return Err(CliError::UnknownFlag(other.to_string())),
         }
     }
@@ -174,7 +187,7 @@ where
     };
 
     if let Some(name) = Subcommand::from_token(&first) {
-        return Ok(Invocation::Subcommand { name, args: rest.collect() });
+        return Ok(Invocation::Subcommand { name, args: rest.collect(), budget, use_lens });
     }
 
     // Everything from here is the child's, verbatim. A token like `--budget`
@@ -183,7 +196,7 @@ where
     let mut argv = Vec::new();
     argv.push(first);
     argv.extend(rest);
-    Ok(Invocation::Run { argv, budget })
+    Ok(Invocation::Run { argv, budget, use_lens })
 }
 
 /// Is this token a flag rather than a command name?
@@ -244,6 +257,8 @@ mod tests {
             Ok(Invocation::Subcommand {
                 name: Subcommand::Show,
                 args: vec!["a3f19c2b".into(), "--level".into(), "2".into()],
+                budget: None,
+                use_lens: None,
             })
         );
         // `git show` is git's subcommand, not ours.
@@ -263,7 +278,7 @@ mod tests {
         ] {
             assert_eq!(
                 parse(vec![name.as_str()]),
-                Ok(Invocation::Subcommand { name, args: vec![] }),
+                Ok(Invocation::Subcommand { name, args: vec![], budget: None, use_lens: None }),
                 "{name}"
             );
         }
@@ -272,11 +287,37 @@ mod tests {
     #[test]
     fn a_budget_flag_before_the_command_is_ours() {
         match parse(vec!["--budget", "500", "git", "diff"]) {
-            Ok(Invocation::Run { argv, budget }) => {
+            Ok(Invocation::Run { argv, budget, use_lens }) => {
                 assert_eq!(argv, vec!["git", "diff"]);
                 assert_eq!(budget, Some(500));
+                assert_eq!(use_lens, None);
             }
             other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_use_flag_before_the_command_is_ours() {
+        match parse(vec!["--use", "git-diff", "git", "diff"]) {
+            Ok(Invocation::Run { argv, use_lens, .. }) => {
+                assert_eq!(argv, vec!["git", "diff"]);
+                assert_eq!(use_lens.as_deref(), Some("git-diff"));
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_use_flag_before_a_subcommand_is_kept() {
+        // `lens --use git-diff plot cargo test` has to force the lens on plot,
+        // not drop the flag because plot is not a child command.
+        match parse(vec!["--use", "git-diff", "plot", "cargo", "test"]) {
+            Ok(Invocation::Subcommand { name, args, use_lens, .. }) => {
+                assert_eq!(name, Subcommand::Plot);
+                assert_eq!(args, vec!["cargo", "test"]);
+                assert_eq!(use_lens.as_deref(), Some("git-diff"));
+            }
+            other => panic!("expected Plot, got {other:?}"),
         }
     }
 

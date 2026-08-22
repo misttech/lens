@@ -10,10 +10,10 @@ description = "Run a command, keep its full output, show an agent the view worth
 # serde_json. Anything else needs a written justification in the commit that
 # adds it.
 [dependencies]
-# JSON for the run store's meta.json and the command log's JSONL records. A
-# hand-written serializer would do for the write side, but `lens stats` has to
-# parse the log back and `lens show` has to parse meta.json, and a hand-rolled
-# *parser* is a larger liability than the dependency is.
+# Lens files are TOML. Writing them by hand would be fine; parsing nested
+# tables, arrays of stages, and `extends` is the larger liability — the same
+# argument that brought serde_json in for meta.json.
+toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

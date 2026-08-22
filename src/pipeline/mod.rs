@@ -255,6 +255,34 @@ pub fn default_stages() -> Vec<&'static dyn Stage> {
     ]
 }
 
+/// Names of the default stages, including budget, as a lens would write them.
+pub fn default_stage_names() -> &'static [&'static str] {
+    &["ansi", "progress", "dedupe", "classify", "context", "rank", "budget"]
+}
+
+/// Look up a stage by the name a lens uses.
+///
+/// `budget` is not here: it has to see both streams. Unknown names, and names
+/// of stages this build does not have (`rules`, `collapse`), return `None`
+/// rather than failing the run — a lens written for a fuller build still
+/// filters, just without the stages that are not here yet.
+pub fn stage_named(name: &str) -> Option<&'static dyn Stage> {
+    Some(match name {
+        "ansi" => &ansi::Ansi,
+        "progress" => &progress::Progress,
+        "dedupe" => &dedupe::Dedupe,
+        "classify" => &classify::Classify,
+        "context" => &context::Context,
+        "rank" => &rank::Rank,
+        _ => return None,
+    })
+}
+
+/// The runnable stages named by a lens, in order, skipping unknown names.
+pub fn stages_named(names: &[String]) -> Vec<&'static dyn Stage> {
+    names.iter().filter_map(|name| stage_named(name)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,5 +484,23 @@ mod tests {
             }
         }
         assert!(doc.blocks.iter().any(|b| b.class == Class::Error && b.kept()));
+    }
+
+    #[test]
+    fn unknown_stage_names_are_skipped() {
+        // A lens written for a fuller build still filters: rules and collapse
+        // are not in this binary, and inventing a failure for them would turn
+        // a config problem into the user's command failing.
+        let stages = stages_named(&[
+            "ansi".into(),
+            "rules".into(),
+            "collapse".into(),
+            "classify".into(),
+            "no-such-stage".into(),
+        ]);
+        let names: Vec<&str> = stages.iter().map(|s| s.name()).collect();
+        assert_eq!(names, vec!["ansi", "classify"]);
+        assert!(stage_named("budget").is_none());
+        assert!(stage_named("rules").is_none());
     }
 }

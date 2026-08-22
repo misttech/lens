@@ -24,7 +24,7 @@ fn lens_bin() -> PathBuf {
 
 /// Run `lens <args>` and collect everything it produced.
 fn lens(args: &[&str]) -> Output {
-    Command::new(lens_bin()).args(args).output().expect("run lens")
+    Command::new(lens_bin()).args(args).env("LENS_CONFIG", "/dev/null").output().expect("run lens")
 }
 
 /// Run the same command without Lens, for comparison.

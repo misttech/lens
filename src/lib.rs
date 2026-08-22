@@ -15,10 +15,12 @@
 
 pub mod adapters;
 pub mod cli;
+pub mod config;
 pub mod executor;
 pub mod log;
 pub mod pipeline;
 pub mod platform;
+pub mod plot;
 pub mod render;
 pub mod report;
 pub mod resolve;
