@@ -48,6 +48,18 @@ impl Sandbox {
         cmd.output().expect("run lens")
     }
 
+    /// Run `lens <args>` with raw `OsStr` arguments — for arguments that are
+    /// not valid UTF-8 and so cannot go through [`Sandbox::lens`].
+    #[cfg(unix)]
+    fn lens_os(&self, args: &[&std::ffi::OsStr]) -> Output {
+        Command::new(lens_bin())
+            .args(args)
+            .env("LENS_STORE", self.store())
+            .env("LENS_LOG_DIR", self.logs())
+            .output()
+            .expect("run lens")
+    }
+
     /// Every run directory in the store.
     fn runs(&self) -> Vec<PathBuf> {
         let Ok(entries) = fs::read_dir(self.store()) else { return Vec::new() };
@@ -396,4 +408,46 @@ fn show_level_three_is_the_stored_bytes() {
     let out = sandbox.lens(&["show", &handle, "--level", "3"]);
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(out.stdout, b"x\ny\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_argument_runs_instead_of_panicking() {
+    // std::env::args() panics on the first non-UTF-8 argument; Lens has to
+    // resolve that doubt toward running the command, not toward a crash.
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let sandbox = Sandbox::new("non-utf8-arg");
+    let bad = OsStr::from_bytes(b"\xffbad\xfe");
+    let out = sandbox.lens_os(&["/bin/echo".as_ref(), bad]);
+
+    assert_eq!(out.status.code(), Some(0), "no panic, no signal death");
+    let mut expected = bad.as_bytes().to_vec();
+    expected.push(b'\n');
+    assert_eq!(out.stdout, expected, "the raw byte argument reached the child untouched");
+}
+
+#[test]
+fn show_treats_a_missing_meta_as_failed_not_succeeded() {
+    // meta.json can be absent from a run interrupted mid-write (store.rs
+    // documents the possibility). Defaulting the exit code to 0 there would
+    // report success for a run whose fate was never recorded — exactly the
+    // lie this tool exists to prevent.
+    let sandbox = Sandbox::new("show-no-meta");
+    let run = sandbox.lens(&["sh", "-c", "printf 'kept\\n'"]);
+    assert_eq!(run.status.code(), Some(0));
+    let handle = sandbox.run_records()[0]["handle"].as_str().unwrap().to_string();
+
+    let run_dir = sandbox.store().join(&handle);
+    fs::remove_file(run_dir.join("meta.json")).expect("remove meta.json");
+
+    let out = sandbox.lens(&["show", &handle]);
+    assert_ne!(out.status.code(), Some(0), "an unrecorded fate is never reported as success");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no recorded exit code"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.stdout, b"kept\n", "the stored content is still retrievable without meta.json");
 }
