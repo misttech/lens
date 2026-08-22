@@ -19,10 +19,12 @@
 use crate::static_assert_size_and_align;
 
 pub mod ansi;
+pub mod budget;
 pub mod classify;
 pub mod context;
 pub mod dedupe;
 pub mod progress;
+pub mod rank;
 
 /// Which stream a document came from.
 ///
@@ -95,12 +97,14 @@ pub struct Elision {
 }
 
 /// A run of lines treated as one unit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     /// The lines, in order.
     pub lines: Vec<Line>,
     /// Assigned by the classify stage.
     pub class: Class,
+    /// Assigned by the rank stage. Meaningless until then.
+    pub score: f32,
     /// Whether the renderer will emit it.
     pub keep: Keep,
     /// Set when `keep` is [`Keep::Drop`].
@@ -110,7 +114,7 @@ pub struct Block {
 impl Block {
     /// A block of ordinary output.
     pub fn new(lines: Vec<Line>) -> Self {
-        Block { lines, class: Class::default(), keep: Keep::default(), elided: None }
+        Block { lines, class: Class::default(), score: 0.0, keep: Keep::default(), elided: None }
     }
 
     /// Mark this block as outside the view, recording why.
@@ -144,18 +148,23 @@ impl Block {
 }
 
 /// One stream, parsed into blocks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Doc {
     /// The blocks, in the order they appeared.
     pub blocks: Vec<Block>,
     /// Which stream this came from.
     pub source: Stream,
+    /// The view still exceeds the budget after everything droppable is gone.
+    ///
+    /// Set by the budget stage. Force-kept errors are never deleted to make the
+    /// number fit; the overrun is reported instead.
+    pub budget_exceeded: bool,
 }
 
 impl Doc {
     /// An empty document for `source`.
     pub fn empty(source: Stream) -> Self {
-        Doc { blocks: Vec::new(), source }
+        Doc { blocks: Vec::new(), source, budget_exceeded: false }
     }
 
     /// Total lines across every block, dropped ones included.
@@ -194,11 +203,18 @@ pub struct Ctx {
     pub exit_code: i32,
     /// How many blocks of context to keep around a failure.
     pub context_blocks: usize,
+    /// Token budget for the view, when one was asked for.
+    ///
+    /// Absent means the budget stage does nothing: levels still choose how
+    /// much to show, and ranking still scores, but nothing is dropped for
+    /// want of room. Inventing a default budget here would measure a number
+    /// nobody chose.
+    pub budget: Option<usize>,
 }
 
 impl Default for Ctx {
     fn default() -> Self {
-        Ctx { exit_code: 0, context_blocks: 3 }
+        Ctx { exit_code: 0, context_blocks: 3, budget: None }
     }
 }
 
@@ -223,8 +239,20 @@ pub fn run(doc: &mut Doc, stages: &[&dyn Stage], ctx: &Ctx) {
 }
 
 /// The default stage list.
+///
+/// Rank scores; budget drops. Budget is not in this list because it has to
+/// see both streams at once — a token budget is for the invocation, not for
+/// each descriptor. [`budget::apply`] runs after these, over stdout and
+/// stderr together.
 pub fn default_stages() -> Vec<&'static dyn Stage> {
-    vec![&ansi::Ansi, &progress::Progress, &dedupe::Dedupe, &classify::Classify, &context::Context]
+    vec![
+        &ansi::Ansi,
+        &progress::Progress,
+        &dedupe::Dedupe,
+        &classify::Classify,
+        &context::Context,
+        &rank::Rank,
+    ]
 }
 
 #[cfg(test)]
@@ -238,7 +266,7 @@ mod tests {
             .enumerate()
             .map(|(i, text)| Block::new(vec![Line { text: (*text).to_string(), origin: i + 1 }]))
             .collect();
-        Doc { blocks, source: Stream::Stdout }
+        Doc { blocks, source: Stream::Stdout, budget_exceeded: false }
     }
 
     #[test]
@@ -409,5 +437,24 @@ mod tests {
             assert_eq!(elision.lines_removed, block.lines.len());
             assert!(!elision.reason.is_empty());
         }
+    }
+
+    #[test]
+    fn forced_blocks_survive_budget_pressure() {
+        let mut lines: Vec<String> =
+            (0..30).map(|i| format!("ordinary line {i} of padding")).collect();
+        lines.push("error: boom".into());
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let mut doc = doc_of(&refs);
+        let ctx = Ctx { exit_code: 1, budget: Some(1), ..Ctx::default() };
+        run(&mut doc, &default_stages(), &ctx);
+        crate::pipeline::budget::apply(&mut [&mut doc], &ctx);
+
+        for block in &doc.blocks {
+            if block.keep == Keep::Force || matches!(block.class, Class::Error | Class::Failure) {
+                assert!(block.kept(), "budget deleted forced content: {}", block.text());
+            }
+        }
+        assert!(doc.blocks.iter().any(|b| b.class == Class::Error && b.kept()));
     }
 }

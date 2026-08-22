@@ -20,6 +20,7 @@ pub mod log;
 pub mod pipeline;
 pub mod platform;
 pub mod render;
+pub mod report;
 pub mod resolve;
 pub mod static_assert;
 pub mod store;

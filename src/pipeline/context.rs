@@ -57,7 +57,7 @@ mod tests {
     /// Classify then apply context, which is the order the pipeline uses.
     fn run(lines: &[&str], context_blocks: usize) -> Doc {
         let mut doc = doc_of(lines);
-        let ctx = Ctx { exit_code: 0, context_blocks };
+        let ctx = Ctx { exit_code: 0, context_blocks, ..Ctx::default() };
         classify::Classify.apply(&mut doc, &ctx);
         Context.apply(&mut doc, &ctx);
         doc
@@ -99,7 +99,7 @@ mod tests {
         let mut doc = doc_of(&["running check", "error: boom"]);
         doc.blocks[0].drop_with("dedupe");
 
-        let ctx = Ctx { exit_code: 0, context_blocks: 1 };
+        let ctx = Ctx { exit_code: 0, context_blocks: 1, ..Ctx::default() };
         classify::Classify.apply(&mut doc, &ctx);
         Context.apply(&mut doc, &ctx);
 
@@ -112,7 +112,7 @@ mod tests {
         // Churn does not become worth reading by being adjacent to an error,
         // and the budget it would take belongs to the real context.
         let mut doc = doc_of(&["   Compiling foo v1.0", "error: boom"]);
-        let ctx = Ctx { exit_code: 0, context_blocks: 1 };
+        let ctx = Ctx { exit_code: 0, context_blocks: 1, ..Ctx::default() };
         super::super::progress::Progress.apply(&mut doc, &ctx);
         classify::Classify.apply(&mut doc, &ctx);
         Context.apply(&mut doc, &ctx);
