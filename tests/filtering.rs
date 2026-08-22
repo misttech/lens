@@ -140,9 +140,11 @@ fn anything_left_out_is_announced() {
 }
 
 #[test]
-fn a_marker_carries_a_handle_that_resolves() {
-    // Both halves of the announcement, checked end to end: the marker names a
-    // handle, and that handle produces the full output.
+fn a_marker_names_a_handle_but_not_a_command() {
+    // Both halves of the announcement: the marker names a handle that resolves,
+    // and does not tell the reader to go and fetch everything with it. An agent
+    // shown `lens show <handle> --level 3` followed it and pulled the entire raw
+    // output, which costs more than not filtering at all.
     let sandbox = Sandbox::new("marker-handle");
     let (out, _) = sandbox.run_script(NOISY);
 
@@ -154,8 +156,12 @@ fn a_marker_carries_a_handle_that_resolves() {
 
     let handle = marker
         .split_whitespace()
+        .map(|word| word.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
         .find(|word| word.len() == 8 && word.bytes().all(|b| b.is_ascii_hexdigit()))
         .expect("a handle in the marker");
+
+    assert!(!marker.contains("lens show"), "a marker offers, it does not instruct: {marker}");
+    assert!(!marker.contains("--level"), "{marker}");
 
     let raw = sandbox.lens(&["show", handle, "--level", "3"]);
     assert_eq!(raw.status.code(), Some(0));
