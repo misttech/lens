@@ -384,6 +384,7 @@ mod tests {
                     .collect(),
             )],
             source: super::super::Stream::Stdout,
+            budget_exceeded: false,
         };
         Dedupe.apply(&mut doc, &Ctx::default());
 
@@ -473,6 +474,7 @@ mod tests {
                     .collect(),
             )],
             source: super::super::Stream::Stdout,
+            budget_exceeded: false,
         };
         Dedupe.apply(&mut doc, &Ctx::default());
 
@@ -533,6 +535,7 @@ mod tests {
                 Line { text: "warning: a".into(), origin: 2 },
             ])],
             source: super::super::Stream::Stdout,
+            budget_exceeded: false,
         };
         Dedupe.apply(&mut doc, &Ctx::default());
 

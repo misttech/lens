@@ -48,6 +48,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Invocation::Subcommand { name: Subcommand::Show, args } => show(&args),
+        Invocation::Subcommand { name: Subcommand::Explain, args } => explain(&args),
         Invocation::Subcommand { name: Subcommand::Stats, args } => stats(&args),
         Invocation::Subcommand { name: Subcommand::Logs, args } => logs(&args),
         Invocation::Subcommand { name, .. } => {
@@ -55,7 +56,7 @@ fn main() -> ExitCode {
             // says this is a gap in the build, not a missing feature.
             fail(&format!("`lens {name}` is not implemented yet — it arrives with the pipeline"))
         }
-        Invocation::Run { argv } => run(&argv),
+        Invocation::Run { argv, budget } => run(&argv, budget),
     }
 }
 
@@ -98,7 +99,7 @@ fn log_level_from_env() -> Level {
 }
 
 /// Run a command: passthrough or capture, then propagate its fate.
-fn run(argv: &[String]) -> ExitCode {
+fn run(argv: &[String], cli_budget: Option<usize>) -> ExitCode {
     let env = Env::from_process();
     let mode_raw =
         std::env::var_os("LENS_MODE").is_some_and(|mode| mode.eq_ignore_ascii_case("raw"));
@@ -149,16 +150,18 @@ fn run(argv: &[String]) -> ExitCode {
                     level_from_env().unwrap_or(lens::render::DEFAULT_LEVEL.number()),
                 )
                 .unwrap_or(lens::render::DEFAULT_LEVEL);
-                let view = filter(
+                let budget = cli_budget.or_else(budget_from_env);
+                let filtered = filter(
                     &captured.stdout,
                     &captured.stderr,
                     captured.exit_code,
                     level,
                     handle_str.as_deref(),
+                    budget,
                 );
 
                 logger.run(RunRecord {
-                    handle: handle_str,
+                    handle: handle_str.clone(),
                     cmd: command_name(argv).to_string(),
                     argv: argv.to_vec(),
                     cwd: cwd.to_string_lossy().into_owned(),
@@ -166,17 +169,33 @@ fn run(argv: &[String]) -> ExitCode {
                     dur_ms: Some(duration_ms),
                     out_bytes: Some(captured.stdout.len() as u64),
                     err_bytes: Some(captured.stderr.len() as u64),
-                    in_lines: Some(view.in_lines as u64),
-                    out_lines: Some(view.out_lines as u64),
-                    in_tok: Some(view.in_tok as u64),
-                    out_tok: Some(view.out_tok as u64),
+                    in_lines: Some(filtered.view.in_lines as u64),
+                    out_lines: Some(filtered.view.out_lines as u64),
+                    in_tok: Some(filtered.view.in_tok as u64),
+                    out_tok: Some(filtered.view.out_tok as u64),
                     level: Some(level.number()),
-                    stages: view.stages.clone(),
+                    stages: filtered.view.stages.clone(),
                     passthrough: false,
                     reason: None,
                 });
 
-                emit(&view.stdout, &view.stderr);
+                emit(&filtered.view.stdout, &filtered.view.stderr);
+
+                // After the child's output has flushed: a report mixed into
+                // stderr mid-stream would be read as the command's.
+                if debug_from_env() {
+                    let report = lens::report::Report::from_docs(
+                        &[&filtered.stdout, &filtered.stderr],
+                        handle_str.as_deref(),
+                        command_name(argv),
+                        captured.exit_code,
+                        Some(duration_ms),
+                        filtered.view.in_tok,
+                        filtered.view.out_tok,
+                    );
+                    eprint!("{}", report.render());
+                }
+
                 exit_with(captured.exit_code)
             }
             // An internal failure is never allowed to become the user's
@@ -280,7 +299,18 @@ fn show(args: &[String]) -> ExitCode {
         // this path is what makes the store's promise checkable.
         emit(&stdout, &stderr);
     } else {
-        let view = filter(&stdout, &stderr, exit_code.unwrap_or(1), level, Some(handle.as_str()));
+        // A stored run with no recorded exit code is treated as a failure, so
+        // the floor fires and the tail is kept. Guessing success would be the
+        // one guess that can hide one.
+        let view = filter(
+            &stdout,
+            &stderr,
+            exit_code.unwrap_or(1),
+            level,
+            Some(handle.as_str()),
+            budget_from_env(),
+        )
+        .view;
         emit(&view.stdout, &view.stderr);
     }
 
@@ -315,35 +345,56 @@ struct View {
 ///
 /// The two are filtered separately and never merged: which stream a line came
 /// from is a signal the pipeline uses, and the caller gets them back on the
-/// descriptors the command wrote them to.
+/// descriptors the command wrote them to. The budget, when there is one, sees
+/// both at once — it is a budget for the invocation, not for each pipe.
 fn filter(
     stdout: &[u8],
     stderr: &[u8],
     exit_code: i32,
     level: ViewLevel,
     handle: Option<&str>,
-) -> View {
-    let ctx = Ctx { exit_code, ..Ctx::default() };
+    budget: Option<usize>,
+) -> Filtered {
+    let ctx = Ctx { exit_code, budget, ..Ctx::default() };
     let stages = lens::pipeline::default_stages();
 
-    let out = filter_stream(stdout, Stream::Stdout, &stages, &ctx, level, handle);
-    let err = filter_stream(stderr, Stream::Stderr, &stages, &ctx, level, handle);
+    let mut out_doc = pipeline_doc(stdout, Stream::Stdout, &stages, &ctx);
+    let mut err_doc = pipeline_doc(stderr, Stream::Stderr, &stages, &ctx);
+    lens::pipeline::budget::apply(&mut [&mut out_doc, &mut err_doc], &ctx);
+
+    let out = render_stream(stdout, &out_doc, level, handle);
+    let err = render_stream(stderr, &err_doc, level, handle);
 
     let estimator = Heuristic;
-    View {
-        // Measured on the rendered view rather than on the kept blocks: the
-        // marker lines are part of what the caller pays for, and a reduction
-        // figure that omits them would flatter the tool.
-        in_tok: estimator.estimate(&String::from_utf8_lossy(stdout))
-            + estimator.estimate(&String::from_utf8_lossy(stderr)),
-        out_tok: estimator.estimate(&String::from_utf8_lossy(&out.bytes))
-            + estimator.estimate(&String::from_utf8_lossy(&err.bytes)),
-        in_lines: out.in_lines + err.in_lines,
-        out_lines: out.out_lines + err.out_lines,
-        stages: stages.iter().map(|stage| stage.name().to_string()).collect(),
-        stdout: out.bytes,
-        stderr: err.bytes,
+    Filtered {
+        view: View {
+            in_tok: estimator.estimate(&String::from_utf8_lossy(stdout))
+                + estimator.estimate(&String::from_utf8_lossy(stderr)),
+            out_tok: estimator.estimate(&String::from_utf8_lossy(&out.bytes))
+                + estimator.estimate(&String::from_utf8_lossy(&err.bytes)),
+            in_lines: out.in_lines + err.in_lines,
+            out_lines: out.out_lines + err.out_lines,
+            stages: {
+                let mut names: Vec<String> =
+                    stages.iter().map(|stage| stage.name().to_string()).collect();
+                if budget.is_some() {
+                    names.push("budget".into());
+                }
+                names
+            },
+            stdout: out.bytes,
+            stderr: err.bytes,
+        },
+        stdout: out_doc,
+        stderr: err_doc,
     }
+}
+
+/// A rendered view of both streams, and the documents it was rendered from.
+struct Filtered {
+    view: View,
+    stdout: lens::pipeline::Doc,
+    stderr: lens::pipeline::Doc,
 }
 
 /// One filtered stream.
@@ -353,7 +404,7 @@ struct StreamView {
     out_lines: usize,
 }
 
-/// Filter one stream, or pass it through when it is not text.
+/// Filter one stream's document, or leave it empty when the bytes are not text.
 ///
 /// Output that is not valid UTF-8 is emitted unchanged. Filtering it would mean
 /// deciding what a byte sequence means, and the honest answer is that Lens does
@@ -361,24 +412,31 @@ struct StreamView {
 /// every byte matters. Mangling it into replacement characters to save tokens
 /// would break the command for the sake of reading it, so this is one more case
 /// where doubt resolves to passthrough.
-fn filter_stream(
+fn pipeline_doc(
     raw: &[u8],
     stream: Stream,
     stages: &[&dyn lens::pipeline::Stage],
     ctx: &Ctx,
+) -> lens::pipeline::Doc {
+    if std::str::from_utf8(raw).is_err() {
+        return lens::pipeline::Doc::empty(stream);
+    }
+    let mut doc = lens::adapters::parse(raw, stream);
+    lens::pipeline::run(&mut doc, stages, ctx);
+    doc
+}
+
+fn render_stream(
+    raw: &[u8],
+    doc: &lens::pipeline::Doc,
     level: ViewLevel,
     handle: Option<&str>,
 ) -> StreamView {
     let lines = raw.iter().filter(|b| **b == b'\n').count();
-
     if std::str::from_utf8(raw).is_err() {
         return StreamView { bytes: raw.to_vec(), in_lines: lines, out_lines: lines };
     }
-
-    let mut doc = lens::adapters::parse(raw, stream);
-    lens::pipeline::run(&mut doc, stages, ctx);
-    let rendered = lens::render::render(&doc, level, handle);
-
+    let rendered = lens::render::render(doc, level, handle);
     StreamView {
         bytes: rendered.into_bytes(),
         in_lines: doc.line_count(),
@@ -389,6 +447,79 @@ fn filter_stream(
 /// `LENS_LEVEL`, when set to a level this build understands.
 fn level_from_env() -> Option<u8> {
     std::env::var_os("LENS_LEVEL")?.to_string_lossy().parse().ok()
+}
+
+/// `LENS_BUDGET`, when set to a token count.
+fn budget_from_env() -> Option<usize> {
+    std::env::var_os("LENS_BUDGET")?.to_string_lossy().parse().ok()
+}
+
+/// `LENS_DEBUG=1` (or `true`): emit the filtering report after the child.
+fn debug_from_env() -> bool {
+    std::env::var_os("LENS_DEBUG").is_some_and(|value| {
+        let value = value.to_string_lossy();
+        value == "1" || value.eq_ignore_ascii_case("true")
+    })
+}
+
+/// `lens explain <handle>`.
+///
+/// Re-runs the pipeline against stored bytes and prints the report. The
+/// command is not re-executed; the report describes the view of a run that
+/// already happened.
+fn explain(args: &[String]) -> ExitCode {
+    let env = Env::from_process();
+
+    let mut handle_text: Option<&String> = None;
+    for arg in args {
+        match arg.as_str() {
+            other if other.starts_with('-') => {
+                return fail(&format!("unknown flag `{other}` for lens explain"));
+            }
+            _ => handle_text = Some(arg),
+        }
+    }
+
+    let Some(text) = handle_text else {
+        return fail(&"lens explain needs a handle, e.g. lens explain a3f19c2b");
+    };
+    let Some(handle) = lens::store::Handle::parse(text) else {
+        return fail(&format!("`{text}` is not a handle — expected 8 hex digits"));
+    };
+
+    let store = Store::new(&env.store);
+    let Ok(stdout) = store.read_stream(&handle, lens::store::Stream::Stdout) else {
+        return fail(&format!("no run `{handle}` in {}", env.store.display()));
+    };
+    let stderr = store.read_stream(&handle, lens::store::Stream::Stderr).unwrap_or_default();
+    let meta = store.read_meta(&handle).ok();
+    let exit_code = meta.as_ref().map(|m| m.exit_code).unwrap_or(1);
+    let cmd = meta
+        .as_ref()
+        .and_then(|m| m.argv.first())
+        .map(|name| name.rsplit('/').next().unwrap_or(name).to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let dur_ms = meta.as_ref().map(|m| m.duration_ms);
+
+    let filtered = filter(
+        &stdout,
+        &stderr,
+        exit_code,
+        lens::render::DEFAULT_LEVEL,
+        Some(handle.as_str()),
+        budget_from_env(),
+    );
+    let report = lens::report::Report::from_docs(
+        &[&filtered.stdout, &filtered.stderr],
+        Some(handle.as_str()),
+        &cmd,
+        exit_code,
+        dur_ms,
+        filtered.view.in_tok,
+        filtered.view.out_tok,
+    );
+    print!("{}", report.render());
+    ExitCode::SUCCESS
 }
 
 /// `lens stats [--since 7d] [--cmd git]`.
@@ -576,10 +707,12 @@ fn help_text() -> String {
         "lens {version} — run a command, keep its full output, show the view worth reading
 
 usage:
-  lens <command> [args...]      run a command and filter its output
+  lens [--budget N] <command> [args...]
+                                run a command and filter its output
   lens --version
   lens --help
   lens show <handle> [--level N]  re-derive a view without re-running it
+  lens explain <handle>         filtering report for a past run
   lens stats [--since 7d] [--cmd git]
   lens logs [--tail N] [--level warn]
 
@@ -589,11 +722,13 @@ child, including tokens that look like lens flags.
 environment:
   LENS_MODE=raw                 emit raw output, exit with the child's code
   LENS_LEVEL=0..3               how much detail to show (default 2; 3 is raw)
+  LENS_BUDGET=<tokens>          drop lowest-ranked content to fit
+  LENS_DEBUG=1                  filtering report on stderr after the child
   LENS_LOG=<level>              off error warn info debug trace (default info)
   LENS_STORE=<dir>              where runs are kept
   LENS_LOG_DIR=<dir>            where logs are kept
 
-not implemented yet: explain, plot, lenses, config
+not implemented yet: plot, lenses, config
 ",
         version = env!("CARGO_PKG_VERSION")
     )

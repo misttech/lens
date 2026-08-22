@@ -137,9 +137,8 @@ fn a_missing_command_fails_the_way_a_shell_fails() {
 
 #[test]
 fn an_unknown_lens_flag_does_not_become_a_command() {
-    // Executing `--budget` would be the alternative, and it would be a very
-    // confusing error message.
-    let out = lens(&["--budget", "500", "true"]);
+    // Silently treating it as a command would try to execute `--not-a-flag`.
+    let out = lens(&["--not-a-flag", "true"]);
     assert_ne!(code(&out), 0);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("unknown lens flag"), "{stderr}");
