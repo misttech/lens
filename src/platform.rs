@@ -98,6 +98,25 @@ pub fn passthrough(cmd: &mut Command) -> Passthrough {
     }
 }
 
+/// Set the name the child sees as its own `argv[0]`.
+///
+/// Left as the user typed it rather than as Lens resolved it, so a command
+/// that inspects its own name behaves the way it would outside Lens.
+#[cfg(unix)]
+pub fn set_arg0(cmd: &mut Command, arg0: &str) {
+    use std::os::unix::process::CommandExt;
+    cmd.arg0(arg0);
+}
+
+/// See the Unix version of [`set_arg0`] for the contract.
+///
+/// The standard library has no portable way to set `argv[0]` apart from the
+/// program path, so on a platform without the Unix extension the child sees
+/// the resolved program name instead. This only matters to a command that
+/// inspects its own `argv[0]`, and no verified target reaches this branch.
+#[cfg(not(unix))]
+pub fn set_arg0(_cmd: &mut Command, _arg0: &str) {}
+
 /// Is `fd` a terminal?
 ///
 /// Used to decide whether a child may take over the terminal. A wrong answer
@@ -160,6 +179,26 @@ pub fn try_lock_exclusive(file: &std::fs::File) -> bool {
     // and EX | NB is a valid operation pair. Failure is reported by return
     // value, not by corrupting anything.
     unsafe { flock(fd, lock_op::EX | lock_op::NB) == 0 }
+}
+
+/// Does this file's mode mark it executable?
+///
+/// Called only after the caller has confirmed `meta` belongs to a regular
+/// file; this checks permissions, not file type.
+#[cfg(unix)]
+pub fn is_executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// See the Unix version of [`is_executable`] for the contract.
+///
+/// No verified target reaches this branch; permission bits don't carry the
+/// same meaning off Unix, so a regular file is treated as executable once the
+/// caller has already confirmed it is one.
+#[cfg(not(unix))]
+pub fn is_executable(_meta: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// Release an advisory lock taken by [`try_lock_exclusive`].
@@ -256,6 +295,35 @@ impl Dirs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn is_executable_reads_the_permission_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!("lens-exec-test-{}", std::process::id()));
+        std::fs::write(&path, b"#!/bin/sh\n").expect("write file");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!is_executable(&std::fs::metadata(&path).unwrap()));
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_executable(&std::fs::metadata(&path).unwrap()));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_arg0_changes_only_argv0() {
+        // A child that echoes its own argv[0] is the only way to observe this
+        // from outside; /bin/sh -c is the smallest one available everywhere.
+        let mut cmd = Command::new("/bin/sh");
+        set_arg0(&mut cmd, "custom-name");
+        cmd.arg("-c").arg("echo \"$0\"");
+        let output = cmd.output().expect("run shell");
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "custom-name");
+    }
 
     fn env_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
         let owned: Vec<(String, String)> =
