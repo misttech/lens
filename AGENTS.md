@@ -23,6 +23,8 @@ itself.
   the code, it is stale within days, and it is nobody's business outside the
   account. When a run is blocked by one, say the run was blocked and why it
   matters to the result — not what the provider said about the account.
+  `Co-Authored-By` / `Co-authored-by` trailers stay: they name an author, not a
+  session.
 - **Linear history.** `main` is rebase merged; squash and merge commits are
   disabled. Every commit lands individually, so every commit builds, passes
   tests, and carries a message worth keeping. See
