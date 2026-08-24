@@ -28,13 +28,17 @@ is a worse tool than one reporting 70% fewer and 100%.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import io
 import json
 import os
+import shlex
 import shutil
 import statistics
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import tomllib
@@ -78,6 +82,32 @@ VARIANTS: dict[str, dict[str, str]] = {
 }
 
 DEFAULT_VARIANTS = ["raw", "level2", "level1", "level0"]
+
+# The microVM sandbox, named by env rather than hard-coded: the harness needs a
+# CLI that can boot an image, mount a directory read-only, and bind a secret to
+# one upstream — not one particular implementation of those verbs.
+SANDBOX = os.environ.get("LENS_SANDBOX", "airlock")
+SANDBOX_ARGS = ["--local"]
+SANDBOX_IMAGE = os.environ.get("LENS_SANDBOX_IMAGE", "lens-bench")
+SANDBOX_KERNEL = os.environ.get("LENS_SANDBOX_KERNEL", "")
+GUEST_MEM_MIB = 2048
+
+# Boot, image mount and the copy back, on top of the task's own timeout.
+BOOT_GRACE_S = 60
+
+# What each agent has to reach, and under which header. The key is bound to
+# that host: the guest is given a placeholder and the real value is substituted
+# on the way out, so it never enters the VM. Putting a live key inside the
+# sandbox would hand it to the thing under test.
+UPSTREAM = {
+    "cursor": ("CURSOR_API_KEY", "api2.cursor.sh"),
+    "claude": ("ANTHROPIC_API_KEY", "api.anthropic.com:x-api-key"),
+}
+
+# A cell's stdout carries the agent's output and then the work directory. Two
+# markers, because the sandbox gives one stdout and the verifier needs both.
+AGENT_MARK = "===lens-bench:agent==="
+WORK_MARK = "===lens-bench:work==="
 
 
 @dataclass
@@ -327,6 +357,179 @@ def run_agent(
     return result, tool_calls, wall
 
 
+def guest_script(task: Task, variant: str, model: str, driver: str) -> str:
+    """The one script a cell runs inside its microVM.
+
+    The verifier stays on the host. Copying it in would put the expected answer
+    on the same filesystem as the agent being asked to go and find it, and a
+    task that can be passed by reading the marking scheme measures nothing.
+    """
+    assignments = " ".join(
+        f"{name}={shlex.quote(value)}"
+        for name, value in sorted(VARIANTS[variant].items())
+    )
+    prompt = task.prompt.replace("{lens}", "lens").strip()
+    agent = " ".join(
+        shlex.quote(arg)
+        for arg in agent_command(driver, prompt, model, task.turn_limit)
+    )
+    # The agent's own failure is data, not a reason to abandon the cell: `|| true`
+    # so the work directory still comes back and verify still gets to speak.
+    return f"""set -eu
+mkdir -p /tmp/work "$HOME"
+cp -a /mnt/task/. /tmp/work/
+cd /tmp/work
+{assignments} {agent} >/tmp/agent.out 2>/tmp/agent.err || true
+echo '{AGENT_MARK}'
+cat /tmp/agent.out
+echo '{WORK_MARK}'
+tar c -C /tmp/work . | base64 -w0
+echo
+"""
+
+
+def split_sections(stdout: str) -> tuple[str, str]:
+    """Pull the agent's output and the packed work directory back apart."""
+    if AGENT_MARK not in stdout or WORK_MARK not in stdout:
+        return "", ""
+    _, rest = stdout.split(AGENT_MARK, 1)
+    agent, packed = rest.split(WORK_MARK, 1)
+    return agent.strip(), packed.strip()
+
+
+def restore(work: Path, packed: str) -> None:
+    """Unpack the guest's work directory over the host's copy.
+
+    Verification then runs against what the agent actually left behind, on the
+    host, where the task's own verify.sh already lives.
+    """
+    raw = base64.b64decode(packed)
+    with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+        tar.extractall(work, filter="data")
+
+
+def run_agent_vm(
+    task: Task,
+    work: Path,
+    variant: str,
+    model: str,
+    driver: str,
+    image: str,
+    kernel: str,
+) -> tuple[dict, int, float]:
+    """Run one cell in its own microVM, and bring the work directory back."""
+    name, upstream = UPSTREAM[driver]
+    command = [
+        SANDBOX,
+        *SANDBOX_ARGS,
+        "run",
+        image,
+        "--mem",
+        str(GUEST_MEM_MIB),
+        "--mount-dir",
+        f"{work}:/mnt/task",
+        "--allow-dns",
+        "--secret",
+        f"{name}={upstream}",
+        "--timeout",
+        f"{task.timeout_s}s",
+    ]
+    if kernel:
+        command += ["--kernel", kernel]
+    command += ["--", "sh", "-c", guest_script(task, variant, model, driver)]
+
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=task.timeout_s + BOOT_GRACE_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"is_error": True, "subtype": "timeout"}, 0, time.monotonic() - started
+
+    wall = time.monotonic() - started
+    agent_out, packed = split_sections(proc.stdout)
+    if packed:
+        restore(work, packed)
+
+    if not agent_out:
+        # The cell never got as far as the agent. That is the sandbox's failure,
+        # not the filter's, and it has to be recorded as one.
+        stderr = [line for line in proc.stderr.splitlines() if line.strip()]
+        detail = stderr[-1][:160] if stderr else f"exit {proc.returncode}"
+        return {"is_error": True, "subtype": f"sandbox: {detail}"}, 0, wall
+
+    result, tool_calls = parse_agent_output(driver, agent_out)
+    return result, tool_calls, wall
+
+
+def preflight_vm(image: str, kernel: str, driver: str) -> str:
+    """Check what a VM sweep needs before it spends anything. Returns the digest.
+
+    Every one of these failures would otherwise surface in the first cell, or
+    worse, in all of them — as an agent that never started, which reads like a
+    rate limit rather than a missing flag.
+    """
+    if shutil.which(SANDBOX) is None:
+        raise SystemExit(f"no {SANDBOX} on PATH — set LENS_SANDBOX to the CLI")
+
+    name, _ = UPSTREAM[driver]
+    if not os.environ.get(name):
+        raise SystemExit(f"{name} is not set — the guest is given it by the broker")
+
+    if not kernel:
+        raise SystemExit("no guest kernel — set LENS_SANDBOX_KERNEL or pass --kernel")
+
+    inspect = subprocess.run(
+        [SANDBOX, *SANDBOX_ARGS, "image", "inspect", image],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if inspect.returncode != 0:
+        raise SystemExit(
+            f"image {image} is not loaded — build it with bench/image/build.py"
+        )
+
+    # Boot it once. A sandbox that cannot find its VMM, or an image without the
+    # agent in it, fails identically to an agent that never started — and that
+    # reads like a rate limit, which is the one misdiagnosis this harness has
+    # already been burned by.
+    agent = {"cursor": "cursor-agent", "claude": "claude"}[driver]
+    boot = subprocess.run(
+        [
+            SANDBOX,
+            *SANDBOX_ARGS,
+            "run",
+            image,
+            "--kernel",
+            kernel,
+            "--mem",
+            str(GUEST_MEM_MIB),
+            "--",
+            "sh",
+            "-c",
+            f"command -v lens >/dev/null || exit 3\n"
+            f"command -v {agent} >/dev/null || exit 4",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if boot.returncode == 3:
+        raise SystemExit(f"image {image} has no lens on PATH")
+    if boot.returncode == 4:
+        raise SystemExit(f"image {image} has no {agent} — rebuild it with --agent")
+    if boot.returncode != 0:
+        stderr = [line for line in boot.stderr.splitlines() if line.strip()]
+        raise SystemExit(f"image {image} does not boot: {stderr[-1] if stderr else ''}")
+
+    return json.loads(inspect.stdout).get("digest", "")
+
+
 def total_model_tokens(usage: dict) -> int:
     """Everything the model was charged for, not just what it wrote.
 
@@ -348,7 +551,16 @@ def total_model_tokens(usage: dict) -> int:
     return sum(int(usage.get(key, 0) or 0) for key in keys)
 
 
-def run_cell(task: Task, variant: str, repeat: int, model: str, driver: str) -> Cell:
+def run_cell(
+    task: Task,
+    variant: str,
+    repeat: int,
+    model: str,
+    driver: str,
+    isolation: str = "host",
+    image: str = SANDBOX_IMAGE,
+    kernel: str = SANDBOX_KERNEL,
+) -> Cell:
     """Set up, run, verify, tear down.
 
     An agent that returns in a couple of seconds having spent no tokens did not
@@ -362,10 +574,15 @@ def run_cell(task: Task, variant: str, repeat: int, model: str, driver: str) -> 
             ["sh", str(task.setup), str(work)], check=True, capture_output=True
         )
 
-        result, tool_calls, wall = run_agent(task, work, variant, model, driver)
+        def once() -> tuple[dict, int, float]:
+            if isolation == "vm":
+                return run_agent_vm(task, work, variant, model, driver, image, kernel)
+            return run_agent(task, work, variant, model, driver)
+
+        result, tool_calls, wall = once()
         if not attempted(result):
             time.sleep(RETRY_PAUSE_S)
-            result, tool_calls, wall = run_agent(task, work, variant, model, driver)
+            result, tool_calls, wall = once()
 
         verified = subprocess.run(
             ["sh", str(task.verify), str(work)], capture_output=True, check=False
@@ -472,13 +689,22 @@ def find_knee(summaries: list[Summary]) -> str | None:
 
 
 def to_json(
-    cells: list[Cell], summaries: list[Summary], model: str, driver: str
+    cells: list[Cell],
+    summaries: list[Summary],
+    model: str,
+    driver: str,
+    isolation: str = "host",
+    image: str = "",
 ) -> str:
     return json.dumps(
         {
             "driver": driver,
             "model": model,
             "binary": binary_fingerprint(),
+            "isolation": isolation,
+            # Empty on the host path: there is no image, and the environment is
+            # whatever the machine happened to be.
+            "image": image,
             "knee": find_knee(summaries),
             "summaries": [
                 {
@@ -501,11 +727,17 @@ def to_json(
 
 
 def plan(
-    tasks: list[Task], variants: list[str], repeats: int, model: str, driver: str
+    tasks: list[Task],
+    variants: list[str],
+    repeats: int,
+    model: str,
+    driver: str,
+    isolation: str = "host",
 ) -> None:
     """Say what a run would do, and what it would cost, without doing it."""
     cells = len(tasks) * len(variants) * repeats
     print(f"driver    {driver}")
+    print(f"isolation {isolation}")
     print(f"model     {model}")
     print(f"tasks     {', '.join(t.name for t in tasks)}")
     print(f"variants  {', '.join(variants)}")
@@ -528,6 +760,16 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--driver", default="claude", choices=DRIVERS)
     parser.add_argument("--model", help="defaults to the driver's usual model")
+    parser.add_argument(
+        "--isolation",
+        default="host",
+        choices=("host", "vm"),
+        help="host: this machine. vm: one microVM per cell, from a pinned image",
+    )
+    parser.add_argument(
+        "--image", default=SANDBOX_IMAGE, help="image for --isolation vm"
+    )
+    parser.add_argument("--kernel", default=SANDBOX_KERNEL, help="guest kernel")
     parser.add_argument("--out", type=Path, help="write the full result JSON here")
     parser.add_argument("--save-baseline", action="store_true")
     args = parser.parse_args()
@@ -547,12 +789,17 @@ def main() -> int:
     model = args.model or DEFAULT_MODEL[args.driver]
 
     if not args.run:
-        plan(tasks, variants, args.repeats, model, args.driver)
+        plan(tasks, variants, args.repeats, model, args.driver, args.isolation)
         return 0
 
     if not lens_binary().is_file():
         print(f"no binary at {lens_binary()} — run `make build` first", file=sys.stderr)
         return 1
+
+    image_digest = ""
+    if args.isolation == "vm":
+        image_digest = preflight_vm(args.image, args.kernel, args.driver)
+        print(f"image     {args.image} {image_digest[:19]}")
 
     fingerprint = binary_fingerprint()
     print(f"binary    {fingerprint}")
@@ -568,7 +815,16 @@ def main() -> int:
                 print(
                     f"[{done}/{total}] {task.name} {variant} #{repeat + 1}", flush=True
                 )
-                cell = run_cell(task, variant, repeat, model, args.driver)
+                cell = run_cell(
+                    task,
+                    variant,
+                    repeat,
+                    model,
+                    args.driver,
+                    args.isolation,
+                    args.image,
+                    args.kernel,
+                )
                 cells.append(cell)
                 status = "pass" if cell.passed else f"FAIL {cell.note}".strip()
                 print(
@@ -596,7 +852,9 @@ def main() -> int:
         for cell in unattempted[:5]:
             print(f"  {cell.task} {cell.variant} #{cell.repeat + 1} — {cell.note}")
 
-    payload = to_json(cells, summaries, model, args.driver)
+    payload = to_json(
+        cells, summaries, model, args.driver, args.isolation, image_digest
+    )
     if args.out:
         args.out.write_text(payload)
         print(f"\nwrote {args.out}")

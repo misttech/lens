@@ -47,6 +47,11 @@ LENS_TARGET = "x86_64-unknown-linux-musl"
 
 IMAGE = "lens-bench:0.1"
 
+# Where a local install of the driving agent lives. Copied in rather than
+# installed, so the image carries the exact build the host has been running and
+# the version is a directory name the results can record.
+AGENT_VERSIONS = Path.home() / ".local/share/cursor-agent/versions"
+
 
 def run(*args: str, **kwargs) -> subprocess.CompletedProcess:
     print(f"    $ {' '.join(args)}", flush=True)
@@ -99,6 +104,21 @@ def fetch_rtk(staging: Path) -> None:
             target.chmod(0o755)
 
 
+def copy_agent(staging: Path, source: Path) -> str:
+    """Copy the agent into the build context. Returns the version it pinned."""
+    if not (source / "cursor-agent").is_file():
+        raise SystemExit(f"{source} does not look like an agent install")
+    shutil.copytree(source, staging / "agent", symlinks=True)
+    return source.name
+
+
+def newest_agent() -> Path | None:
+    if not AGENT_VERSIONS.is_dir():
+        return None
+    versions = sorted(p for p in AGENT_VERSIONS.iterdir() if p.is_dir())
+    return versions[-1] if versions else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -107,7 +127,19 @@ def main() -> int:
         default=REPO_ROOT / "out" / "image" / "lens-bench.tar",
         help="where to write the image archive",
     )
+    parser.add_argument(
+        "--agent",
+        type=Path,
+        default=None,
+        help="agent install directory to bake in (default: the newest local one)",
+    )
     args = parser.parse_args()
+
+    agent = args.agent or newest_agent()
+    if agent is None:
+        raise SystemExit(
+            "no agent install found — pass --agent DIR with one to bake in"
+        )
 
     with tempfile.TemporaryDirectory(prefix="lens-image-") as tmp:
         staging = Path(tmp)
@@ -116,12 +148,15 @@ def main() -> int:
         build_lens(staging)
         print("rtk:")
         fetch_rtk(staging)
+        print("agent:")
+        version = copy_agent(staging, agent)
+        print(f"    pinned {version}")
         print("image:")
         run("docker", "build", "-t", IMAGE, str(staging))
         args.archive.parent.mkdir(parents=True, exist_ok=True)
         run("docker", "save", IMAGE, "-o", str(args.archive))
 
-    print(f"\n{args.archive}")
+    print(f"\n{args.archive}  (agent {version})")
     print("load it into the sandbox with its image-load verb, e.g.")
     print(f"    <sandbox> image load -i {args.archive} -t lens-bench")
     return 0

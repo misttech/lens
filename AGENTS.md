@@ -212,6 +212,34 @@ So a comparison suite has to be built from the commands, not from either tool's
 design, and the byte column is the beginning of the question rather than the
 answer to it — a quarter of a session is what 99.5% of bytes was worth here.
 
+### Running a sweep in a microVM
+
+`--isolation vm` gives every cell its own microVM, booted from the image above,
+instead of a temp directory on whatever machine is running the sweep. The agent
+runs inside it, so both filters and the commands they filter meet the same
+userland every time.
+
+```
+LENS_SANDBOX=<cli> LENS_SANDBOX_KERNEL=<vmlinux> CURSOR_API_KEY=<key> \
+  bench/runner.py --run --driver cursor --isolation vm
+```
+
+Two things about the shape of it. The API key is bound to the one host that
+needs it and never enters the guest: the guest gets a placeholder and the
+sandbox's broker substitutes the real value on the way out. And the verifier
+stays on the host — the guest returns its working directory and `verify.sh`
+runs against that copy, because mounting the verifier would put the expected
+answer on the same filesystem as the agent being asked to find it.
+
+The preflight boots the image once before spending anything. A sandbox that
+cannot find its VMM, an image without the agent in it, and a missing key all
+fail the same way at run time — as an agent that never started, which reads
+like a rate limit. That misdiagnosis has cost this harness a curve before.
+
+Networking needs `CAP_NET_ADMIN` on the sandbox CLI, so an ungranted binary
+fails every cell with a tap-device error. It is recorded as a cell the agent
+never attempted, which keeps it out of the success rate.
+
 ## Platform
 
 Linux is the verified target. macOS compiles and its branches are written but
@@ -297,6 +325,17 @@ thousand unindented lines is one block: 40k lines took 451ms before the fix and
 3` is a valid command line for `mytool`, and Lens does not reinterpret a command
 it was asked to run. An unknown flag *before* the command is an error rather
 than something to execute.
+
+**A benchmark credential is brokered, never mounted.** Under `--isolation vm`
+the guest is given a placeholder and the sandbox substitutes the real value only
+on requests to the one host it is bound to. Mounting a credentials file instead
+would work, and was rejected: it puts a live session inside the VM the agent
+controls, so the isolation still protects the host and no longer protects the
+credential from the thing under test. It also does not avoid the capability the
+sandbox needs for networking, and a rotated refresh token can invalidate the
+copy left on the host — a sweep that logs you out of your own machine halfway
+through. The cost of the broker is that it wants one static credential bound to
+one host, which a subscription login cannot provide.
 
 **Interactive detection reads the git subcommand, not just the flag.** `git add
 -p` prompts per hunk; `git log -p` is output. Bare `python` is a session;
