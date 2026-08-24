@@ -17,6 +17,13 @@ RUN apt-get update \
 COPY lens /usr/local/bin/lens
 COPY rtk /usr/local/bin/rtk
 
+# The agent that drives the benchmark, pinned by the version directory it was
+# copied from. An agent that updates itself mid-sweep changes the driver
+# underneath the curve, which is the same failure the binary fingerprint guards
+# against on the filter side.
+COPY agent /opt/agent
+RUN ln -s /opt/agent/cursor-agent /usr/local/bin/cursor-agent
+
 # The harness mounts one task directory read-only. The mount point has to exist
 # on the read-only root before the guest will accept the mount.
 RUN mkdir -p /mnt/task
