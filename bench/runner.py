@@ -45,7 +45,14 @@ BENCH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCH_DIR.parent
 TASKS_DIR = BENCH_DIR / "tasks"
 RESULTS_DIR = BENCH_DIR / "results"
-BASELINE = RESULTS_DIR / "retention-baseline.json"
+# One committed curve per driver. Saving a cursor run into the claude file
+# would publish one agent's numbers under another agent's name, and nothing in
+# the file would contradict it — the driver is recorded inside, where a reader
+# who already trusts the filename will not look.
+BASELINES = {
+    "claude": RESULTS_DIR / "retention-baseline.json",
+    "cursor": RESULTS_DIR / "retention-cursor.json",
+}
 
 # How the command's output reaches the agent.
 #
@@ -187,7 +194,11 @@ def lens_binary() -> Path:
 # The agents this can drive. Cross-running matters: a curve produced by one
 # agent measures that agent's habits as much as the filter's quality, and a
 # result that only holds for one of them is a result about the agent.
-DRIVERS = ("claude", "cursor")
+#
+# Taken from the baseline map so a driver cannot exist without a file to record
+# it in. That mistake would otherwise surface at the end of a paid sweep, with
+# the results still only in memory.
+DRIVERS = tuple(BASELINES)
 
 # What each driver reports. Cursor's single result object carries tokens but
 # neither turns nor tool calls, so those read zero for it — recorded as a gap
@@ -598,9 +609,10 @@ def main() -> int:
                 "\nrefusing to save a baseline with unattempted cells", file=sys.stderr
             )
             return 1
+        baseline = BASELINES[args.driver]
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        BASELINE.write_text(payload)
-        print(f"baseline written to {BASELINE}")
+        baseline.write_text(payload)
+        print(f"baseline written to {baseline}")
 
     return 0
 
