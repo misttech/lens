@@ -165,6 +165,28 @@ this tool that rests on one agent's numbers is a claim about that agent. Both
 files are committed for that reason, and a change to ranking or to the marker is
 judged against both.
 
+### The trap the suite was missing
+
+`last-line-trap` puts the critical line last, where any harness that truncates
+long command output keeps it by accident — its raw control passes every run, so
+the cell cannot tell a filter from a truncation. `mid-stream-trap` puts the line
+at 2,400 of 4,803, 78,746 bytes in and 80,117 bytes from the end, where neither
+a head nor a tail reaches it. The token it asks for is derived from a random
+blob at print time and recomputed by the verifier, so it cannot be grepped out
+of the tree instead of read.
+
+Level 2 keeps that line, in 752 bytes out of 158,977. Levels 1 and 0 lose it,
+and level 1 renders a marker with no content at all. One cell of each through
+cursor came out at 0.48x the raw control at level 2, 1.01x at level 1 and 1.38x
+at level 0 — the ordering the design predicts, on one run each and not yet a
+curve.
+
+Success stayed at 100% for all of them, including the levels that dropped the
+answer, because an agent that is not shown a line runs the command again. That
+is the general case on this suite: a retention failure surfaces as tokens spent
+recovering rather than as a task failed, so the cost column is where to look for
+it, and the knee only moves when recovery stops working.
+
 ## Platform
 
 Linux is the verified target. macOS compiles and its branches are written but

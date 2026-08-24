@@ -1,0 +1,24 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "mid-stream-trap"
+summary = "The one line that matters is the middle of 4,800"
+
+# The trap last-line-trap does not set. An agent harness that truncates long
+# command output keeps a head, a tail, or both, so the last line survives by
+# accident — and a control that survives by accident cannot tell a filter from
+# a truncation. Here the line sits at batch 600 of 1200, where neither end
+# reaches it. Whatever keeps it kept it because it ranked it, not because of
+# where it fell.
+prompt = """
+Run the migration:
+
+    {lens} sh ./migrate.sh
+
+It reports a reconciliation token that is needed before the migration can be
+resumed. Write that token, and nothing else, into a file called answer.txt in
+this directory.
+"""
+
+turn_limit = 15
+timeout_s = 300
