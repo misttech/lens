@@ -191,6 +191,27 @@ is the general case on this suite: a retention failure surfaces as tokens spent
 recovering rather than as a task failed, so the cost column is where to look for
 it, and the knee only moves when recovery stops working.
 
+### Comparing against another filter
+
+`bench/image/` builds one image holding both this filter and the one it is being
+compared against, and nothing else that differs: the base pinned by digest, the
+other tool by release version and checksum, Lens built static from the working
+tree. A filter that special-cases commands is measured against those commands,
+so a comparison is only about the filters if both read the same git, the same
+python and the same rustc. Run the image under a microVM sandbox and every cell
+starts from the same machine.
+
+The first thing it measured is that the two tools barely overlap. On
+`sh ./migrate.sh` the other one passes 158,976 of 158,977 bytes through
+untouched, having no filter for `sh`, where level 2 renders 714. On `git status`
+it removes 56% where level 2 removes 1%, and on `git log --stat` 89% against
+50%. Neither of those is a result about which tool is better; both are results
+about which commands each one knows.
+
+So a comparison suite has to be built from the commands, not from either tool's
+design, and the byte column is the beginning of the question rather than the
+answer to it — a quarter of a session is what 99.5% of bytes was worth here.
+
 ## Platform
 
 Linux is the verified target. macOS compiles and its branches are written but
