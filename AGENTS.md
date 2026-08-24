@@ -113,27 +113,51 @@ per cell: **task success is 100% everywhere, and filtering costs more total mode
 tokens than not filtering** in eight of nine cells — from 0.98x to 1.72x the raw
 control. Only one cell wins.
 
-The cause is in the tool, not the tasks. Traced with a real run: the agent runs
+The cause was in the tool, not the tasks. Traced with a real run: the agent runs
 the filtered command, reads the marker, and then runs `lens show <handle>
 --level 3`, which hands back the entire raw output. It pays for both views and an
 extra turn, and the 99.8% reduction on the way in buys nothing.
 
-So the marker is doing something the design did not intend. It reads as an
-instruction rather than an offer, and the level it names is the most expensive
-one there is. Whatever replaces it has to make asking for more a decision the
-reader takes deliberately, not the obvious next step — and the retention curve is
-how the replacement gets judged.
+So the marker was doing something the design did not intend. It read as an
+instruction rather than an offer, and the level it named is the most expensive
+one there is. It now describes what is missing and names no command. This file
+predates that change and is kept as the evidence for it — the Sonnet curve has
+not been re-recorded since, so it says what was wrong, not where the tool stands.
 
 This is the harness working. The compression looked excellent and the thing that
 matters was going the wrong way.
 
-### The same curve, a different agent
+### The same curve through a second agent
 
 `bench/results/retention-cursor.json` runs the identical cells through a
-different agent and a different model family. Success is again 100% everywhere,
-and the token picture is not the same one: two of nine cells beat the control on
-one agent, four of nine on the other, and they disagree about which. On the trap
-task, level 2 costs 1.25x on one and 0.73x on the other.
+different agent and a different model family, against the merged tree. Success
+is 100% everywhere and there is again no knee. The token picture is not
+Sonnet's: the trap task at level 2 costs 0.73x its control here and 1.25x there.
+That gap is no longer agent alone, though, since the two files were recorded
+either side of the marker change.
+
+Counting cells that beat their control is the wrong summary in any case, because
+a cell can only win where there is something to remove. Bytes handed to the
+agent:
+
+| task | raw | level 2 | level 1 |
+|---|---|---|---|
+| last-line-trap | 191,039 | 369 | 65 |
+| fix-failing-test | 29,945 | 29,940 | 347 |
+| fix-compile-error | 2,246 | 2,240 | 2,088 |
+
+The two cells where a large input is actually cut are the two cheapest, at 0.73x
+and 0.57x; the trap cell holds that to within 1% across repeats and across both
+binaries. The cells sitting at 1.00x are cells where ranking removed nothing and
+the agent read the control. `fix-compile-error` carries no signal at all — its
+raw output is 2KB, so nothing the filter does can move the tokens, and its own
+raw control swung 94k/205k/94k across three repeats. It is a task the suite
+should replace.
+
+Level 0 is the result that reproduces across both agents and both binaries: it
+costs *more* than showing the output. A 110-byte counts-only view sends the agent
+off to re-derive what it was not shown, and under-showing is paid for downstream —
+the same lesson the marker taught.
 
 So a single-agent curve measures the agent's habits as much as the filter's
 quality — how readily it chases a marker, how much it re-reads. Any claim about
