@@ -129,35 +129,40 @@ matters was going the wrong way.
 
 ### The same curve through a second agent
 
-`bench/results/retention-cursor.json` runs the identical cells through a
-different agent and a different model family, against the merged tree. Success
-is 100% everywhere and there is again no knee. The token picture is not
-Sonnet's: the trap task at level 2 costs 0.73x its control here and 1.25x there.
-That gap is no longer agent alone, though, since the two files were recorded
-either side of the marker change.
+`bench/results/retention-cursor.json` runs the cells through a different agent
+and a different model family, against the merged tree: four tasks, four
+variants, three runs each. Success is 100% in all 48 cells and there is no knee.
+The token picture is not Sonnet's — the trap task at level 2 costs 0.73x its
+control here and 1.25x there — but the two files were recorded either side of
+the marker change, so that gap is not agent alone.
 
-Counting cells that beat their control is the wrong summary in any case, because
-a cell can only win where there is something to remove. Bytes handed to the
-agent:
+Counting cells that beat their control is the wrong summary, because a cell can
+only win where there is something to remove. Bytes handed to the agent, against
+what the cell cost:
 
-| task | raw | level 2 | level 1 |
-|---|---|---|---|
-| last-line-trap | 191,039 | 369 | 65 |
-| fix-failing-test | 29,945 | 29,940 | 347 |
-| fix-compile-error | 2,246 | 2,240 | 2,088 |
+| task | raw | level 2 | level 1 | L2 | L1 | L0 |
+|---|---|---|---|---|---|---|
+| last-line-trap | 191,039 | 369 | 65 | 0.73x | 1.25x | 1.24x |
+| mid-stream-trap | 158,977 | 752 | 64 | 0.74x | 1.27x | 1.29x |
+| fix-failing-test | 29,945 | 29,940 | 347 | 1.01x | 0.58x | 0.97x |
+| fix-compile-error | 2,246 | 2,240 | 2,088 | 1.11x | 0.82x | 1.31x |
 
-The two cells where a large input is actually cut are the two cheapest, at 0.73x
-and 0.57x; the trap cell holds that to within 1% across repeats and across both
-binaries. The cells sitting at 1.00x are cells where ranking removed nothing and
-the agent read the control. `fix-compile-error` carries no signal at all — its
-raw output is 2KB, so nothing the filter does can move the tokens, and its own
-raw control swung 94k/205k/94k across three repeats. It is a task the suite
-should replace.
+The two large-output tasks land on the same number, 0.73x and 0.74x, from
+191KB of service checks and 159KB of migration batches. That is the size of the
+effect on this agent: a quarter of the session, not the 99.5% the byte column
+suggests. Most of what an agent spends is prompt, history and its own output,
+and a harness that truncates long output has already taken the rest.
 
-Level 0 is the result that reproduces across both agents and both binaries: it
-costs *more* than showing the output. A 110-byte counts-only view sends the agent
-off to re-derive what it was not shown, and under-showing is paid for downstream —
-the same lesson the marker taught.
+The ratio tracks whether the view kept the line the task needed, cell by cell.
+Level 1 keeps the failing test and costs 0.58x; level 1 drops the token on both
+traps and costs more than not filtering at all. No cell that lost the answer
+came out cheap. Level 0 costs more than showing the output on three tasks of
+four.
+
+`fix-compile-error` carries no signal: its raw output is 2KB, so nothing the
+filter does can move the tokens, and a single 208k run against a 127k median is
+the whole of its level 2 result. It should be replaced by a task whose output is
+large enough to tell a filter from its control.
 
 So a single-agent curve measures the agent's habits as much as the filter's
 quality — how readily it chases a marker, how much it re-reads. Any claim about
@@ -175,11 +180,10 @@ a head nor a tail reaches it. The token it asks for is derived from a random
 blob at print time and recomputed by the verifier, so it cannot be grepped out
 of the tree instead of read.
 
-Level 2 keeps that line, in 752 bytes out of 158,977. Levels 1 and 0 lose it,
-and level 1 renders a marker with no content at all. One cell of each through
-cursor came out at 0.48x the raw control at level 2, 1.01x at level 1 and 1.38x
-at level 0 — the ordering the design predicts, on one run each and not yet a
-curve.
+Level 2 keeps that line in 752 bytes out of 158,977 and costs 0.74x. Levels 1
+and 0 lose it and cost 1.27x and 1.29x — the ordering the design predicts, and
+the reason the task earns its place: it is the only cell where keeping the line
+required having ranked it.
 
 Success stayed at 100% for all of them, including the levels that dropped the
 answer, because an agent that is not shown a line runs the command again. That
