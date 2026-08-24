@@ -70,7 +70,9 @@ of budget.
 * Don't include agent session identifiers. `Claude-Session:`, a
   `claude.ai/code/session/…` URL, or any other handle that names a
   private coding session is account state, not a description of the
-  change. A commit is public history; a session is not.
+  change. A commit is public history; a session is not. Keep
+  `Co-Authored-By` / `Co-authored-by` trailers — they name who wrote
+  the change, not which session.
 
 ### Two project-specific rules
 
