@@ -225,20 +225,48 @@ fn collapse_repeated_windows(doc: &mut Doc) {
         return;
     }
 
-    let text: Vec<String> = live.iter().map(|i| normalize(&doc.blocks[*i].text())).collect();
+    let exact: Vec<String> = live.iter().map(|i| doc.blocks[*i].text()).collect();
+    let text: Vec<String> = exact.iter().map(|t| normalize(t)).collect();
+    // Normalized line by line, so a window can be asked whether the unit that
+    // repeats has internal shape — which is the question, not whether one
+    // iteration differs from the next.
+    let norm_lines: Vec<Vec<String>> = live
+        .iter()
+        .map(|i| doc.blocks[*i].lines.iter().map(|l| normalize(&l.text)).collect())
+        .collect();
 
-    for window in (2..=MAX_WINDOW.min(live.len() / MIN_REPEATS)).rev() {
+    for window in (1..=MAX_WINDOW.min(live.len() / MIN_REPEATS)).rev() {
         let mut start = 0usize;
         while start + window * MIN_REPEATS <= live.len() {
-            let pattern = &text[start..start + window];
+            // Normalization is what lets a loop body match across iterations
+            // whose counters differ. It earns that only when the repeating unit
+            // has shape: two or more lines that differ from each other. A unit
+            // that is one line, or several lines of one shape, is a single line
+            // wearing a window — and flattening it turns distinct records into
+            // one line and a count.
+            let unit: Vec<&String> = norm_lines[start..start + window].iter().flatten().collect();
+            let has_shape = unit.iter().any(|l| *l != unit[0]);
+
+            let same = |a: usize, b: usize| -> bool {
+                if has_shape {
+                    text[a..a + window] == text[b..b + window]
+                } else {
+                    exact[a..a + window] == exact[b..b + window]
+                }
+            };
+
             let mut repeats = 1usize;
             while start + window * (repeats + 1) <= live.len()
-                && text[start + window * repeats..start + window * (repeats + 1)] == *pattern
+                && same(start, start + window * repeats)
             {
                 repeats += 1;
             }
 
-            if repeats >= MIN_REPEATS {
+            // And a window that reports a failure is never collapsed. Two
+            // failures that look alike are still two failures — today they
+            // survive only because context force-keeps them afterwards, which
+            // is a rescue rather than a rule.
+            if repeats >= MIN_REPEATS && !reports_failure(&exact[start..start + window]) {
                 for copy in 1..repeats {
                     for offset in 0..window {
                         let index = live[start + window * copy + offset];
@@ -383,6 +411,42 @@ mod tests {
         Dedupe.apply(&mut doc, &Ctx::default());
         assert_eq!(kept(&doc).len(), 1);
         assert!(kept(&doc)[0].contains("×3"));
+    }
+
+    #[test]
+    fn distinct_blocks_are_not_one_block_and_a_count() {
+        // The block-level twin of the line-level rule. Eight thousand blocks
+        // differing only by an index collapsed to two, and `×4000` does not
+        // carry what the other 3,999 said.
+        let lines: Vec<String> = (1..=30).map(|i| format!("line {i} unique content")).collect();
+        let mut doc = doc_of(&lines.iter().map(String::as_str).collect::<Vec<_>>());
+        Dedupe.apply(&mut doc, &Ctx::default());
+        assert_eq!(doc.blocks.iter().filter(|b| b.kept()).count(), 30);
+    }
+
+    #[test]
+    fn repeated_failing_blocks_are_never_collapsed() {
+        // These survive today only because context force-keeps them after the
+        // fact. Dedupe has to refuse on its own: a rescue that happens to run
+        // later is not a rule.
+        let mut doc = Doc {
+            blocks: (1..=6)
+                .map(|i| {
+                    Block::new(vec![
+                        Line { text: format!("FAILED tests::case_{i}"), origin: i * 2 - 1 },
+                        Line { text: format!("  expected 200 got 50{i}"), origin: i * 2 },
+                    ])
+                })
+                .collect(),
+            source: super::super::Stream::Stdout,
+        };
+        Dedupe.apply(&mut doc, &Ctx::default());
+
+        assert!(doc.blocks.iter().all(|b| b.kept()), "every failure stays: {:?}", kept(&doc));
+        assert!(
+            !kept(&doc).iter().any(|t| t.contains("[lens: ×")),
+            "and none of them claims to stand for the others"
+        );
     }
 
     #[test]
