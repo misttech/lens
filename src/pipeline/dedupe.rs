@@ -440,6 +440,7 @@ mod tests {
                 })
                 .collect(),
             source: super::super::Stream::Stdout,
+            budget_exceeded: false,
         };
         Dedupe.apply(&mut doc, &Ctx::default());
 

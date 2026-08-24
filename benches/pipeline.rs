@@ -156,7 +156,7 @@ fn measure_all(fixtures: &[Fixture]) -> Vec<Measured> {
 }
 
 fn measure(fixture: &Fixture) -> Measured {
-    let ctx = Ctx::default();
+    let ctx = measured_ctx();
     let parsed = lens::adapters::parse(&fixture.raw, Stream::Stdout);
 
     let mut stages = BTreeMap::new();
@@ -184,7 +184,18 @@ fn measure(fixture: &Fixture) -> Measured {
         stage.apply(&mut progressive, &ctx);
     }
 
-    let rendered = progressive.clone();
+    let mut budgeted = progressive.clone();
+    stages.insert(
+        "budget".to_string(),
+        percentiles(|| {
+            let mut doc = progressive.clone();
+            lens::pipeline::budget::apply(&mut [&mut doc], &ctx);
+            std::hint::black_box(&doc);
+        }),
+    );
+    lens::pipeline::budget::apply(&mut [&mut budgeted], &ctx);
+
+    let rendered = budgeted;
     stages.insert(
         "render".to_string(),
         percentiles(|| {
@@ -205,10 +216,24 @@ fn measure(fixture: &Fixture) -> Measured {
     }
 }
 
+/// The context every measurement runs under.
+///
+/// It carries a budget, so the stage that drops blocks by score actually runs.
+/// Without one, budget returns immediately and its cost is invisible — which is
+/// how it came to walk the whole document once per dropped block, on a path
+/// nothing was measuring.
+///
+/// The number is small on purpose: a budget that most fixtures overrun is what
+/// puts the dropping loop under load.
+fn measured_ctx() -> Ctx {
+    Ctx { budget: Some(500), ..Ctx::default() }
+}
+
 /// Everything Lens does between capturing bytes and having output to write.
 fn end_to_end(raw: &[u8], ctx: &Ctx) -> String {
     let mut doc = lens::adapters::parse(raw, Stream::Stdout);
     lens::pipeline::run(&mut doc, &default_stages(), ctx);
+    lens::pipeline::budget::apply(&mut [&mut doc], ctx);
     render::render(&doc, Level::Detail, Some("00000000"))
 }
 
@@ -350,7 +375,7 @@ fn check_against_baseline(measured: &[Measured], path: &Path) -> bool {
 /// The check that matters most here: a constant-factor slowdown is a cost, but
 /// superlinear growth is a hang waiting for a large enough command.
 fn check_growth(fixtures: &[Fixture]) -> bool {
-    let ctx = Ctx::default();
+    let ctx = measured_ctx();
     let mut failed = false;
 
     println!("growth (1x → 4x → 16x)");

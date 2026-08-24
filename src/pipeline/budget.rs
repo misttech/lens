@@ -29,7 +29,24 @@ pub fn apply(docs: &mut [&mut Doc], ctx: &Ctx) {
         return;
     };
 
-    if tokens_kept(docs) <= budget {
+    // Estimate every kept block once. Re-summing the whole document after each
+    // drop is quadratic in the number of droppable blocks, which on output with
+    // thousands of them costs seconds against a ten-millisecond budget — and the
+    // growth gate cannot see it, because budget is not a Stage and the
+    // benchmark never sets one.
+    let estimator = Heuristic;
+    let mut cost: Vec<Vec<usize>> = docs
+        .iter()
+        .map(|doc| {
+            doc.blocks
+                .iter()
+                .map(|b| if b.kept() { estimator.estimate(&b.text()) } else { 0 })
+                .collect()
+        })
+        .collect();
+
+    let mut total: usize = cost.iter().flatten().sum();
+    if total <= budget {
         return;
     }
 
@@ -47,13 +64,16 @@ pub fn apply(docs: &mut [&mut Doc], ctx: &Ctx) {
     order.sort_by(|a, b| a.2.cmp(&b.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
 
     for (doc_i, block_i, _) in order {
-        if tokens_kept(docs) <= budget {
+        if total <= budget {
             break;
         }
-        docs[doc_i].blocks[block_i].drop_with("budget");
+        if docs[doc_i].blocks[block_i].drop_with("budget") {
+            total -= cost[doc_i][block_i];
+            cost[doc_i][block_i] = 0;
+        }
     }
 
-    if tokens_kept(docs) > budget {
+    if total > budget {
         for doc in docs.iter_mut() {
             doc.budget_exceeded = true;
         }
@@ -67,11 +87,15 @@ fn droppable(block: &super::Block) -> bool {
     block.keep == Keep::Normal && !matches!(block.class, Class::Error | Class::Failure)
 }
 
+/// Test-only: the production path keeps a running total instead, and two ways
+/// of counting the same thing is one way for them to disagree.
+#[cfg(test)]
 fn tokens_in(doc: &Doc) -> usize {
     let estimator = Heuristic;
     doc.blocks.iter().filter(|b| b.kept()).map(|b| estimator.estimate(&b.text())).sum()
 }
 
+#[cfg(test)]
 fn tokens_kept(docs: &[&mut Doc]) -> usize {
     docs.iter().map(|doc| tokens_in(doc)).sum()
 }
