@@ -159,10 +159,17 @@ traps and costs more than not filtering at all. No cell that lost the answer
 came out cheap. Level 0 costs more than showing the output on three tasks of
 four.
 
-`fix-compile-error` carries no signal: its raw output is 2KB, so nothing the
-filter does can move the tokens, and a single 208k run against a 127k median is
-the whole of its level 2 result. It should be replaced by a task whose output is
-large enough to tell a filter from its control.
+`fix-compile-error` carried no signal: its raw output was 2KB, so nothing the
+filter did could move the tokens, and a single 208k run against a 127k median
+was the whole of its level 2 result. `cascading-errors` replaces it with the
+same shape at 22x the output — one wrong field type, 156 diagnostics, one edit
+that removes every one.
+
+That task's first measurement is that **no level of this filter reduces it**:
+49,864 bytes becomes 49,708 at level 2, 0.3%. 156 diagnostics that a reader
+would call the same error are 156 distinct blocks to the ranking, which has no
+notion of one root cause reported at many sites. The old task was too small to
+show it.
 
 So a single-agent curve measures the agent's habits as much as the filter's
 quality — how readily it chases a marker, how much it re-reads. Any claim about

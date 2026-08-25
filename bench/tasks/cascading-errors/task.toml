@@ -1,0 +1,29 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "cascading-errors"
+summary = "One root cause, 156 diagnostics that all look like it"
+
+# The shape that punishes naive ranking: every diagnostic is equally
+# error-shaped, and all but one disappear when the first is fixed. A filter
+# that keeps "the errors" keeps 150 copies of the wrong one.
+#
+# Scored on behaviour, not on shape: a sentinel implementation that preserves
+# "no expiry never expires" passes, because the task is whether the root cause
+# was found in the haystack, not which of two correct fixes was chosen.
+#
+# It replaces a task with the same shape and 2KB of output, which could not
+# distinguish a filter from its control: nothing a filter does moves the tokens
+# on 2KB, so every ratio that cell reported was agent variance.
+prompt = """
+This program does not compile. Build it with:
+
+    {lens} rustc --edition 2021 -o /dev/null session.rs
+
+Find the root cause, fix session.rs so it compiles, and build again to confirm.
+Keep the behaviour: a session with no expiry never expires, and its remaining
+time is unbounded.
+"""
+
+turn_limit = 20
+timeout_s = 300
