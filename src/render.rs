@@ -20,7 +20,7 @@ use crate::pipeline::{Class, Doc};
 pub enum Level {
     /// Counts and outcome only.
     Summary,
-    /// One line per kept item: failures and the shape of the rest.
+    /// The failures, or — when nothing failed — the head of what was kept.
     Items,
     /// Everything the pipeline kept.
     Detail,
@@ -71,7 +71,7 @@ pub fn render(doc: &Doc, level: Level, handle: Option<&str>) -> String {
 
     match level {
         Level::Summary => summary(doc, handle),
-        Level::Items => body(doc, handle, true),
+        Level::Items => items(doc, handle),
         Level::Detail | Level::Raw => body(doc, handle, false),
     }
 }
@@ -102,6 +102,58 @@ fn summary(doc: &Doc, handle: Option<&str>) -> String {
 /// Markers are placed inline rather than gathered at the end, so the reader
 /// learns *where* the gap is. A summary at the bottom says how much is missing;
 /// a marker in position says what it was between.
+/// How many lines a level 1 view shows when there is no failure to show.
+///
+/// Enough to recognize what the command produced and to see the shape of it.
+const HEAD_LINES: usize = 20;
+
+/// Level 1: the failures, or the head of the output when nothing failed.
+///
+/// Failures alone is the right view of a command that failed, and it was the
+/// only view this level had. On a command that succeeded it rendered an empty
+/// one: `grep`, `ls` and `git diff` came back as a marker saying nothing was
+/// shown, which is not a smaller view of the output, it is the absence of one.
+fn items(doc: &Doc, handle: Option<&str>) -> String {
+    let has_failure = doc.blocks.iter().any(|block| block.kept() && is_failure(block.class));
+    if has_failure {
+        return body(doc, handle, true);
+    }
+    head(doc, handle)
+}
+
+/// The first [`HEAD_LINES`] lines of what the pipeline kept, and a marker for
+/// the rest.
+fn head(doc: &Doc, handle: Option<&str>) -> String {
+    let mut out = String::new();
+    let mut shown = 0;
+    let mut pending = Pending::default();
+
+    for block in &doc.blocks {
+        if !block.kept() {
+            pending.add(block);
+            continue;
+        }
+        for line in &block.lines {
+            if shown < HEAD_LINES {
+                out.push_str(&line.text);
+                out.push('\n');
+                shown += 1;
+            } else {
+                pending.lines += 1;
+            }
+        }
+        if shown >= HEAD_LINES {
+            pending.blocks += 1;
+        }
+    }
+
+    if pending.lines > 0 {
+        out.push_str(&marker(&pending, handle));
+        out.push('\n');
+    }
+    out
+}
+
 fn body(doc: &Doc, handle: Option<&str>, failures_only: bool) -> String {
     let mut out = String::new();
     let mut pending = Pending::default();
@@ -356,12 +408,34 @@ mod tests {
     }
 
     #[test]
-    fn a_view_with_nothing_in_it_still_announces() {
-        // Empty output where the command produced plenty would otherwise read
-        // as "the command said nothing".
+    fn level_one_shows_output_that_did_not_fail() {
+        // This level used to be failures and nothing else, so a command that
+        // succeeded rendered as a marker saying nothing was shown. That is not
+        // a smaller view of the output, it is the absence of one.
         let d = filtered("just some ordinary output\n", 0);
         let out = render(&d, Level::Items, Some("h"));
-        assert!(has_marker(&out), "{out:?}");
+        assert!(out.contains("just some ordinary output"), "{out:?}");
+    }
+
+    #[test]
+    fn level_one_shows_a_head_and_announces_the_rest() {
+        let text: String = (1..=60).map(|n| format!("match {n}\n")).collect();
+        let d = filtered(&text, 0);
+        let out = render(&d, Level::Items, Some("h"));
+
+        assert!(out.contains("match 1"), "the head is shown: {out:?}");
+        assert!(!out.contains("match 60"), "the tail is not: {out:?}");
+        assert!(has_marker(&out), "and what is missing is announced: {out:?}");
+    }
+
+    #[test]
+    fn level_one_still_shows_failures_alone() {
+        // The view that was already right: a command that failed shows what
+        // failed, not the head of whatever it printed first.
+        let d = filtered("setup\n\nerror: boom\n\nteardown\n", 1);
+        let out = render(&d, Level::Items, Some("h"));
+        assert!(out.contains("error: boom"));
+        assert!(!out.contains("setup"), "{out:?}");
     }
 
     #[test]
