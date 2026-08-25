@@ -267,7 +267,7 @@ says, on the twelve cases that measure anything:
 
 | case | raw | level 2 | the other filter |
 |---|---|---|---|
-| ruff | 53,214 | 52,964 (1%) | 3,685 (94%, 19 of 50 files) |
+| ruff | 53,214 | 38,224 (28%) | 3,686 (94%, 17 of 50 files) |
 | cargo clippy | 70,660 | 2,541 (96%) | 235 (100%, needle lost) |
 | cargo build | 47,997 | 872 (98%) | 47,771 (1%) |
 | grep | 18,541 | 18,541 (0%) | 12,230 (35%) |
@@ -296,11 +296,18 @@ group as `_`, drops `clippy::needless_return`, and turns 87 of every 90
 locations into "+87 more".
 
 Both shapes are recognized now — `ruff`'s `-->` continuation, `pytest`'s `E`
-lines — and neither compresses much, which is the answer rather than a gap.
-Fifty files with one fault each cannot be grouped: they are fifty places a
-reader has to visit, and a view naming one of them has lost the other
-forty-nine. The compressible part of those outputs is the code frame under each
-finding, which is a ranking decision and not this one.
+lines — and neither can be grouped: fifty files with one fault each are fifty
+places a reader has to visit, and a view naming one of them has lost the other
+forty-nine.
+
+What can go is the source each finding quotes. [`excerpt`](src/pipeline/excerpt.rs)
+removes it once the view holds more than a handful of findings, because that
+excerpt is the one part of a finding the reader already has — it is in the file,
+at the line the finding just named. The message stays, the location stays, the
+help that says what to do stays. It takes ruff from 1% to 28% with all fifty
+files still named, and leaves the rustc cascade alone: grouping already reduced
+that to three findings, and three findings keep the source that makes them
+actionable.
 
 `bench/compare.py` reports what that costs, per view: the distinct files or
 tests a view still names, against the raw output. It is the column that catches

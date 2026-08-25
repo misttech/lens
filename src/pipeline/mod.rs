@@ -24,6 +24,7 @@ pub mod cause;
 pub mod classify;
 pub mod context;
 pub mod dedupe;
+pub mod excerpt;
 pub mod progress;
 pub mod rank;
 
@@ -283,6 +284,10 @@ pub fn default_stages() -> Vec<&'static dyn Stage> {
         // After classify, which is what says a block is a diagnostic, and before
         // context, which force-keeps errors and would leave nothing droppable.
         &cause::Cause,
+        // After cause, so the count of findings is the count the view will
+        // hold: a cascade that grouped down to two keeps the source that makes
+        // those two actionable.
+        &excerpt::Excerpt,
         &context::Context,
         &rank::Rank,
     ]
@@ -290,7 +295,7 @@ pub fn default_stages() -> Vec<&'static dyn Stage> {
 
 /// Names of the default stages, including budget, as a lens would write them.
 pub fn default_stage_names() -> &'static [&'static str] {
-    &["ansi", "progress", "dedupe", "classify", "cause", "context", "rank", "budget"]
+    &["ansi", "progress", "dedupe", "classify", "cause", "excerpt", "context", "rank", "budget"]
 }
 
 /// Look up a stage by the name a lens uses.
@@ -304,6 +309,7 @@ pub fn stage_named(name: &str) -> Option<&'static dyn Stage> {
         "ansi" => &ansi::Ansi,
         "progress" => &progress::Progress,
         "dedupe" => &dedupe::Dedupe,
+        "excerpt" => &excerpt::Excerpt,
         "cause" => &cause::Cause,
         "classify" => &classify::Classify,
         "context" => &context::Context,

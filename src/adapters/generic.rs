@@ -66,7 +66,7 @@ fn is_indented(text: &str) -> bool {
 /// — which starts at the left margin without starting anything. Treating those
 /// as new blocks would split a diagnostic away from the code it is about, which
 /// is precisely the context a reader needs.
-fn is_gutter(text: &str) -> bool {
+pub(crate) fn is_gutter(text: &str) -> bool {
     let rest = text.trim_start_matches(|c: char| c.is_ascii_digit());
     let rest = rest.trim_start();
     rest.starts_with('|')
