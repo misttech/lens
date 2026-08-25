@@ -419,6 +419,15 @@ detail gives you less output at 1 and 2. Level 0 reports counts instead of
 content, so on output with nothing worth showing it can be longer than level 1 —
 it is bounded by the raw view, not by the level above it.
 
+**Level 1 is the failures, or the head of what was kept.** Failures alone is the
+right view of a command that failed, and it was the only view this level had: a
+command that succeeded rendered as a marker saying nothing was shown, which is
+not a smaller view of the output but the absence of one. `grep`, `ls` and
+`git diff` all came back that way. When nothing failed it now shows the first
+twenty lines the pipeline kept and announces the rest. It is a deliberately
+partial view — a search with two hundred and eighty-nine matches does not fit,
+and the marker says so — but it is never empty and never silent.
+
 **Parsing carries a flag rather than rediscovering it.** Whether a block has an
 indented continuation is tracked as the block is built. Asking by scanning the
 block made parsing quadratic in block length, and a command that prints ten
