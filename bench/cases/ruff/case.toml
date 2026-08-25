@@ -7,3 +7,4 @@ claims = ["lens", "rtk"]
 command = "ruff check ."
 rtk = "rtk ruff check ."
 needle = "F401"
+sites = "mod_[0-9]+\\.py"

@@ -267,11 +267,11 @@ says, on the twelve cases that measure anything:
 
 | case | raw | level 2 | the other filter |
 |---|---|---|---|
-| ruff | 53,214 | 52,964 (1%) | 3,686 (94%) |
+| ruff | 53,214 | 52,964 (1%) | 3,685 (94%, 19 of 50 files) |
 | cargo clippy | 70,660 | 2,541 (96%) | 235 (100%, needle lost) |
 | cargo build | 47,997 | 872 (98%) | 47,771 (1%) |
 | grep | 18,541 | 18,541 (0%) | 12,230 (35%) |
-| eslint | 12,324 | 595 (95%) | 1,036 (92%) |
+| eslint | 12,324 | 12,293 (1%) | 1,036 (92%, 10 of 30 files) |
 | git diff | 9,151 | 9,151 (0%) | 6,068 (34%) |
 | tsc | 5,049 | 5,049 (0%) | 5,178 (-2%) |
 | git log | 4,947 | 3,263 (35%) | 410 (92%) |
@@ -295,13 +295,23 @@ difference is the lint identifier, which the smaller view spends. It renders one
 group as `_`, drops `clippy::needless_return`, and turns 87 of every 90
 locations into "+87 more".
 
-Where it still does nothing has two named reasons, neither of them a mystery.
+Both shapes are recognized now — `ruff`'s `-->` continuation, `pytest`'s `E`
+lines — and neither compresses much, which is the answer rather than a gap.
+Fifty files with one fault each cannot be grouped: they are fifty places a
+reader has to visit, and a view naming one of them has lost the other
+forty-nine. The compressible part of those outputs is the code frame under each
+finding, which is a ranking decision and not this one.
 
-`ruff` prints rustc-style: a message line carrying only a code, and the location
-on a `-->` continuation beneath it. Nothing on the line that opens the finding
-says it is one. `pytest` reports an assertion, and `assert 23 == 22` contains no
-word this tree calls a failure. Both need `classify` to learn a shape, and the
-suite already scores what that would be worth.
+`bench/compare.py` reports what that costs, per view: the distinct files or
+tests a view still names, against the raw output. It is the column that catches
+what a needle cannot — a summary that keeps the rule and twenty of the fifty
+files it applies to answers the needle and loses the reader thirty places to go.
+It caught this filter doing exactly that on eslint, at a 96% reduction that kept
+one file of thirty, and the fix is why eslint reads 1% here.
+
+The column measures preservation, not quality. On `cargo test` this filter names
+all eighty tests and the other names the six that failed, and the six are the
+better view.
 
 `bench/session.py` is the paired-session benchmark, deliberately built to the
 same design the other tool publishes so the numbers can be argued about instead

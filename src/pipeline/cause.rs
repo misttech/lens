@@ -24,6 +24,34 @@ use std::collections::{HashMap, HashSet};
 use super::dedupe::normalize;
 use super::{Block, Class, Ctx, Doc, Line, Stage};
 
+/// Flatten digits, but leave anything path-shaped alone.
+///
+/// `mod_0.js` and `mod_1.js` are two files. Flattening their digits makes them
+/// one key, and grouping on it reports one file where thirty were named — which
+/// is what happened: a 96% reduction that kept one file of thirty. A token
+/// carrying a slash or an extension is a place, not a counter.
+fn normalize_sites(text: &str) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(
+            |token| {
+                if looks_like_path(token.trim()) { token.to_string() } else { normalize(token) }
+            },
+        )
+        .collect()
+}
+
+fn looks_like_path(token: &str) -> bool {
+    if token.contains('/') {
+        return true;
+    }
+    // `name.ext`, where the extension is short and alphabetic: mod_0.js, a.rs.
+    token.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty()
+            && (1..=4).contains(&ext.len())
+            && ext.chars().all(|c| c.is_ascii_alphabetic())
+    })
+}
+
 /// Below this a group is not a cascade. Two of the same message is a pair, and
 /// a marker in place of the second one saves nothing worth the sentence.
 const MIN_GROUP: usize = 3;
@@ -124,11 +152,11 @@ fn line_key(text: &str) -> Option<String> {
     // in thirty different files is thirty files a reader has to visit, and
     // flattening the paths into one takes twenty-nine of them out of the view.
     if let Some((path, rest)) = super::classify::split_location(&lower) {
-        return Some(format!("{path}\u{1}{}", normalize(rest)));
+        return Some(format!("{path}\u{1}{}", normalize_sites(rest)));
     }
 
     matches!(super::classify::classify_text(text), Class::Error | Class::Failure | Class::Warning)
-        .then(|| normalize(text))
+        .then(|| normalize_sites(text))
 }
 
 /// The cause a block reports, or `None` when it does not report one.
@@ -137,12 +165,30 @@ fn line_key(text: &str) -> Option<String> {
 /// [`super::dedupe`]'s business, and collapsing them here would elide content
 /// nobody classified as a diagnostic.
 fn key_for(block: &Block) -> Option<String> {
-    if !matches!(block.class, Class::Error | Class::Failure | Class::Warning) {
+    // A reported failure names a thing that failed. Six tests failing the same
+    // way are six failures, and a view saying one of them failed is wrong in
+    // the direction this tool exists to avoid.
+    if !matches!(block.class, Class::Error | Class::Warning) {
         return None;
     }
+
+    // Whatever file the block names is part of its identity, wherever in the
+    // block it says so. Without this, one fault in each of fifty files
+    // collapses to one line naming one file.
+    let site = block.lines.iter().find_map(|line| {
+        let lower = line.text.to_ascii_lowercase();
+        super::classify::arrow_location(&lower)
+            .map(str::to_string)
+            .or_else(|| super::classify::split_location(&lower).map(|(path, _)| path.to_string()))
+    });
+
     // Digits carry the line number, the column, and the counter in the
     // identifier — everything that differs between two reports of one cause.
-    Some(normalize(&block.lines.first()?.text))
+    let message = normalize_sites(&block.lines.first()?.text);
+    Some(match site {
+        Some(path) => format!("{path}\u{1}{message}"),
+        None => message,
+    })
 }
 
 #[cfg(test)]
@@ -360,5 +406,32 @@ mod tests {
         group_within(&mut block);
         assert_eq!(block.lines.len(), 1);
         assert!(block.lines[0].text.ends_with("[lens: ×3]"), "{}", block.lines[0].text);
+    }
+
+    #[test]
+    fn a_path_is_a_place_not_a_counter() {
+        // The bug the site-coverage column found: two files became one key, and
+        // a 96% reduction kept one file of thirty.
+        assert_ne!(normalize_sites("mod_0.js"), normalize_sites("mod_1.js"));
+        assert_ne!(normalize_sites("/tmp/case/mod_0.js"), normalize_sites("/tmp/case/mod_9.js"));
+        // A counter is still a counter.
+        assert_eq!(normalize_sites("retry 3 of 9"), normalize_sites("retry 5 of 9"));
+        // And a cascade in one file still groups.
+        assert_eq!(
+            normalize_sites("error[E0308]: mismatched types"),
+            normalize_sites("error[E0999]: mismatched types")
+        );
+    }
+
+    #[test]
+    fn findings_in_different_files_keep_their_files() {
+        // eslint prints the path as a header and its findings underneath, so
+        // the path is the only thing telling two blocks apart.
+        let mut doc = doc_of(&["/tmp/mod_0.js", "/tmp/mod_1.js", "/tmp/mod_2.js"]);
+        for block in &mut doc.blocks {
+            block.class = Class::Error;
+        }
+        Cause.apply(&mut doc, &Ctx::default());
+        assert_eq!(doc.blocks.iter().filter(|b| b.kept()).count(), 3);
     }
 }

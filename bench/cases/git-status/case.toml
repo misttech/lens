@@ -6,3 +6,4 @@ summary = "Forty modified files in a dirty tree"
 claims = ["lens", "rtk"]
 command = "git status"
 needle = "mod_17.py"
+sites = "mod_[0-9]+\\.py"

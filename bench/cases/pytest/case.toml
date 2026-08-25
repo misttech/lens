@@ -7,3 +7,4 @@ claims = ["lens", "rtk"]
 command = "python3 -m pytest -q"
 rtk = "rtk pytest -q"
 needle = "test_case_37"
+sites = "test_case_[0-9]+"

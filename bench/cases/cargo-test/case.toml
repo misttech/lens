@@ -7,3 +7,4 @@ claims = ["lens", "rtk"]
 command = "cargo test --offline"
 rtk = "rtk cargo test --offline"
 needle = "case_37"
+sites = "case_[0-9]+"

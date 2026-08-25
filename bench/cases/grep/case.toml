@@ -10,3 +10,4 @@ command = "grep -rn 'pub fn' src/"
 # table of bytes. Its documented form is used here.
 rtk = "rtk grep 'pub fn' src/ -r"
 needle = "marker.rs"
+sites = "mod_[0-9]+\\.rs"

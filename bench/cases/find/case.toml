@@ -7,3 +7,4 @@ claims = ["lens", "rtk"]
 command = "find . -name '*.rs'"
 rtk = "rtk find '*.rs' ."
 needle = "marker.rs"
+sites = "mod_[0-9]+\\.rs"
