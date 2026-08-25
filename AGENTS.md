@@ -251,12 +251,52 @@ never attempted, which keeps it out of the success rate.
 
 `bench/compare.py` measures compression with no model in the loop. Compression
 is deterministic, so it costs nothing: run the command raw, run it under each
-filter, count the bytes — both filters in one microVM, so the git, python and
-rustc they read are the same build. It reports a second column that a
-compression table usually omits: whether the line the command was run for is
-still in the view. That column pays for itself. `rtk grep "pub fn" src/` returns
-36 bytes against 5,944 raw, a 99% reduction, and the content is
-`grep: src/: Is a directory`.
+filter, count the bytes — every case in `bench/cases/` inside one microVM, so
+the git, cargo, python and node they read are the same build.
+
+The cases are the overlap set: commands both tools name a filter for, taken from
+their own documentation, declared in `case.toml` **before** anything was
+measured. A tool is only run against a command it claims, because reporting 0%
+for a command a tool never offered to filter reads as a loss rather than as
+coverage. Each tool also gets the invocation its own documentation gives — they
+are not the same string, and `rtk grep "pub fn" src/` without `-r` hands grep a
+directory, fails, and returns 36 bytes that a byte table scores as a 99% win.
+
+Every case carries a needle: the line the command was run for. What the suite
+says, on the twelve cases that measure anything:
+
+| case | raw | level 2 | the other filter |
+|---|---|---|---|
+| ruff | 53,214 | 52,964 (1%) | 3,686 (94%) |
+| cargo clippy | 70,660 | 4,316 (94%) | 235 (100%, needle lost) |
+| cargo build | 47,997 | 47,847 (1%) | 47,771 (1%) |
+| grep | 18,541 | 18,541 (0%) | 12,230 (35%) |
+| eslint | 12,324 | 12,293 (1%) | 1,036 (92%) |
+| git diff | 9,151 | 9,151 (0%) | 6,068 (34%) |
+| tsc | 5,049 | 5,063 (0%) | 5,178 (-2%) |
+| git log | 4,947 | 3,263 (35%) | 410 (92%) |
+| cargo test | 3,651 | 3,582 (2%) | 1,140 (69%) |
+| pytest | 2,071 | 2,071 (0%) | 813 (61%) |
+| ls | 1,657 | 1,655 (1%) | 158 (91%) |
+| git status | 1,155 | 1,154 (1%) | 516 (56%) |
+| find | 533 | 533 (0%) | 281 (48%) |
+
+**On the overlap set this filter loses, and not narrowly.** Ten of thirteen
+cases go the other way, most of them by an order of magnitude. The reason is
+structural rather than incidental: a hundred and fifty eslint findings, or fifty
+ruff findings, are not repetition and are not progress — every line is distinct,
+every line is a real finding, and a pipeline built on dedupe, progress elision
+and ranking has no opinion about them. A per-command parser groups them by rule
+and prints counts. That is what the whole overlap set rewards.
+
+Two results run the other way and are worth as much. On `cargo clippy` the
+per-command view is 235 bytes against 4,316, and what it spends the difference
+on is the lint identifier — `clippy::needless_return` is gone, one group renders
+as `_`, and 87 of every 90 locations become "+87 more". The other is that no
+filter here touches `cargo build`: 150 cascading rustc errors, 1% from both.
+
+None of that is an argument that the ranking is right. It is the measurement
+that says where it is not, on commands chosen before the numbers existed.
 
 `bench/session.py` is the paired-session benchmark, deliberately built to the
 same design the other tool publishes so the numbers can be argued about instead

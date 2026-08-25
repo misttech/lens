@@ -1,0 +1,12 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "grep"
+summary = "289 matches across 25 files"
+claims = ["lens", "rtk"]
+command = "grep -rn 'pub fn' src/"
+# Not a passthrough of grep's flags on the other side: invoked without -r it
+# hands grep a directory and grep fails, which reads as a 99% reduction on a
+# table of bytes. Its documented form is used here.
+rtk = "rtk grep 'pub fn' src/ -r"
+needle = "marker.rs"

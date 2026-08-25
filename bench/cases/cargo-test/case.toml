@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "cargo-test"
+summary = "Six failures in eighty tests"
+claims = ["lens", "rtk"]
+command = "cargo test --offline"
+rtk = "rtk cargo test --offline"
+needle = "case_37"

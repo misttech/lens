@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "find"
+summary = "Twenty-five source files under three directories"
+claims = ["lens", "rtk"]
+command = "find . -name '*.rs'"
+rtk = "rtk find '*.rs' ."
+needle = "marker.rs"

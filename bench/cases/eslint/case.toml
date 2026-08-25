@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "eslint"
+summary = "A hundred and fifty lint findings across thirty files"
+claims = ["lens", "rtk"]
+command = "npx --no-install eslint ."
+rtk = "rtk lint"
+needle = "no-unused-vars"

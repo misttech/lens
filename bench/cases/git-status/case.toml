@@ -1,0 +1,8 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "git-status"
+summary = "Forty modified files in a dirty tree"
+claims = ["lens", "rtk"]
+command = "git status"
+needle = "mod_17.py"

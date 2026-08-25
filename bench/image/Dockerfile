@@ -8,9 +8,17 @@
 # Built by bench/image/build.py, which is where the tool versions are pinned.
 FROM rust:1-slim-trixie@sha256:cc0448b41c3b7b7fea44f5dc50eacba729a56db365b65b7bd5e8a82d5b3db078
 
+# The toolchains the comparison suite runs. Every one of them is a command
+# the other filter names a filter for, so a case that needs one is a case both
+# tools claim — which is the only kind worth comparing on.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 git ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      python3 python3-pytest python3-pip git ca-certificates nodejs npm \
  && rm -rf /var/lib/apt/lists/*
+
+RUN rustup component add clippy \
+ && npm install -g --no-fund --no-audit eslint typescript \
+ && pip install --no-cache-dir --break-system-packages ruff
 
 # Both static, so neither filter depends on the base image's libc and neither
 # can be the one that got a different one.

@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "cargo-clippy"
+summary = "Ninety lint findings of four kinds"
+claims = ["lens", "rtk"]
+command = "cargo clippy --offline"
+rtk = "rtk cargo clippy --offline"
+needle = "clippy::"
