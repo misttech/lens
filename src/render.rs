@@ -209,6 +209,13 @@ fn describe(pending: &Pending) -> String {
     match pending.reason {
         Some("dedupe") => format!("{lines} further repeated line{plural} not shown"),
         Some("progress") => format!("{lines} progress line{plural} not shown"),
+        Some("cause") => {
+            // Counted in blocks, not lines: what the reader is being told is
+            // how many further reports of one thing there were.
+            let blocks = pending.blocks;
+            let plural = if blocks == 1 { "" } else { "s" };
+            format!("{blocks} further diagnostic{plural} with the same cause not shown")
+        }
         Some(other) => format!("{lines} line{plural} not shown · {other}"),
         None if pending.blocks > 1 => {
             format!("{lines} line{plural} in {} blocks not shown", pending.blocks)

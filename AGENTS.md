@@ -268,35 +268,36 @@ says, on the twelve cases that measure anything:
 | case | raw | level 2 | the other filter |
 |---|---|---|---|
 | ruff | 53,214 | 52,964 (1%) | 3,686 (94%) |
-| cargo clippy | 70,660 | 4,316 (94%) | 235 (100%, needle lost) |
-| cargo build | 47,997 | 47,847 (1%) | 47,771 (1%) |
+| cargo clippy | 70,660 | 2,541 (96%) | 235 (100%, needle lost) |
+| cargo build | 47,997 | 872 (98%) | 47,771 (1%) |
 | grep | 18,541 | 18,541 (0%) | 12,230 (35%) |
-| eslint | 12,324 | 12,293 (1%) | 1,036 (92%) |
+| eslint | 12,324 | 595 (95%) | 1,036 (92%) |
 | git diff | 9,151 | 9,151 (0%) | 6,068 (34%) |
 | tsc | 5,049 | 5,063 (0%) | 5,178 (-2%) |
 | git log | 4,947 | 3,263 (35%) | 410 (92%) |
-| cargo test | 3,651 | 3,582 (2%) | 1,140 (69%) |
+| cargo test | 3,651 | 3,391 (8%) | 1,140 (69%) |
 | pytest | 2,071 | 2,071 (0%) | 813 (61%) |
 | ls | 1,657 | 1,655 (1%) | 158 (91%) |
 | git status | 1,155 | 1,154 (1%) | 516 (56%) |
 | find | 533 | 533 (0%) | 281 (48%) |
 
-**On the overlap set this filter loses, and not narrowly.** Ten of thirteen
-cases go the other way, most of them by an order of magnitude. The reason is
-structural rather than incidental: a hundred and fifty eslint findings, or fifty
-ruff findings, are not repetition and are not progress — every line is distinct,
-every line is a real finding, and a pipeline built on dedupe, progress elision
-and ranking has no opinion about them. A per-command parser groups them by rule
-and prints counts. That is what the whole overlap set rewards.
+**On the overlap set this filter still loses.** Nine of thirteen cases go the
+other way, several by an order of magnitude, and the reason is structural: fifty
+ruff findings or a `git log` are not repetition and are not progress. Every line
+is distinct and every line is real, and dedupe, progress elision and ranking
+have no opinion about them where a per-command parser groups by rule and counts.
 
-Two results run the other way and are worth as much. On `cargo clippy` the
-per-command view is 235 bytes against 4,316, and what it spends the difference
-on is the lint identifier — `clippy::needless_return` is gone, one group renders
-as `_`, and 87 of every 90 locations become "+87 more". The other is that no
-filter here touches `cargo build`: 150 cascading rustc errors, 1% from both.
+Four cases moved when [`cause`](src/pipeline/cause.rs) landed, and two of them
+crossed over. `cargo build` went from 1% to 98% — 150 diagnostics reporting one
+wrong field type, which is the case neither tool handled — and eslint from 1% to
+95%. `cargo clippy` is 2,541 bytes against 235: ten times larger, and the
+difference is the lint identifier, which the smaller view spends. It renders one
+group as `_`, drops `clippy::needless_return`, and turns 87 of every 90
+locations into "+87 more".
 
-None of that is an argument that the ranking is right. It is the measurement
-that says where it is not, on commands chosen before the numbers existed.
+Where it still does nothing is where `classify` does not call the line a
+diagnostic. ruff, pytest and tsc print findings that no stage labels as errors,
+so nothing groups them. That is the next measurement, not a mystery.
 
 `bench/session.py` is the paired-session benchmark, deliberately built to the
 same design the other tool publishes so the numbers can be argued about instead
@@ -407,6 +408,19 @@ thousand unindented lines is one block: 40k lines took 451ms before the fix and
 3` is a valid command line for `mytool`, and Lens does not reinterpret a command
 it was asked to run. An unknown flag *before* the command is an error rather
 than something to execute.
+
+**One cause is reported once.** A wrong field type is reported at every use
+site: 150 diagnostics, one edit, one sentence repeated. `dedupe` cannot see it —
+those blocks name different lines, quote different source, and carry caret runs
+whose length follows the literal underneath — so `cause` keys on the message
+alone and elides every report after the first. Two unrelated errors that open
+with the same sentence are grouped too, and the second is announced rather than
+shown; the alternative was handing the reader 150 copies, and the store still
+has all of them. It runs after `classify`, which is what says a block is a
+diagnostic, and before `context`, which force-keeps errors and would otherwise
+leave nothing droppable. `context` gained one exception for it: a block grouped
+away as another report of a cause already in the view is not that error's
+context, and rescuing it is how a cascade returns one neighbour at a time.
 
 **A benchmark credential is brokered, never mounted.** Under `--isolation vm`
 the guest is given a placeholder and the sandbox substitutes the real value only
