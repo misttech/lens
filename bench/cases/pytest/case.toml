@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "pytest"
+summary = "Six failures in eighty tests"
+claims = ["lens", "rtk"]
+command = "python3 -m pytest -q"
+rtk = "rtk pytest -q"
+needle = "test_case_37"

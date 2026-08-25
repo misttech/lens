@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "ruff"
+summary = "Two hundred lint findings"
+claims = ["lens", "rtk"]
+command = "ruff check ."
+rtk = "rtk ruff check ."
+needle = "F401"

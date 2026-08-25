@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "tsc"
+summary = "Sixty type errors across thirty files"
+claims = ["lens", "rtk"]
+command = "npx --no-install tsc --noEmit -p ."
+rtk = "rtk tsc"
+needle = "mod_17.ts"

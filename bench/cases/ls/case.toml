@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "ls"
+summary = "Three directories, long form"
+claims = ["lens", "rtk"]
+command = "ls -la src/ src/pipeline/ src/adapters/"
+rtk = "rtk ls src/"
+needle = "marker.rs"

@@ -1,0 +1,9 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "cargo-build"
+summary = "One wrong field type, 150 call sites"
+claims = ["lens", "rtk"]
+command = "cargo build --offline"
+rtk = "rtk cargo build --offline"
+needle = "expected `u64`, found `Option<{integer}>`"

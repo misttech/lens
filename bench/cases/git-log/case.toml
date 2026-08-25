@@ -1,0 +1,10 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "git-log"
+summary = "Nine commits with per-file stats"
+claims = ["lens", "rtk"]
+command = "git log --stat -9"
+# Each tool gets the invocation its own documentation gives.
+rtk = "rtk git log -n 9"
+needle = "extend mod_3"
