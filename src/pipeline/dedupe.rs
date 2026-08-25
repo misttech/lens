@@ -303,10 +303,14 @@ fn annotate_block(block: &mut Block, total: usize) {
 
 /// Strip variable detail so two runs of the same work compare equal.
 ///
+/// Shared with [`super::cause`], which needs the same notion of "the parts that
+/// differ between two reports of one thing" and would otherwise grow a second
+/// copy of it to drift from.
+///
 /// Timings, addresses and counters differ on every iteration and mean nothing to
 /// the comparison. Digits are the whole of that difference in practice, and
 /// flattening them is cheaper than parsing.
-fn normalize(text: &str) -> String {
+pub(super) fn normalize(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_digits = false;
     for c in text.chars() {

@@ -42,10 +42,24 @@ impl Stage for Context {
                 if doc.blocks[neighbour].class == Class::Progress {
                     continue;
                 }
+                // A block grouped away as another report of a cause that is
+                // still in the view is not context: it is the same sentence
+                // again. Rescuing it is how a cascade comes back intact, one
+                // neighbour at a time. Anything else an earlier stage dropped
+                // is still worth rescuing — a deduplicated line beside an error
+                // is what the error was doing.
+                if elided_by(&doc.blocks[neighbour], "cause") {
+                    continue;
+                }
                 doc.blocks[neighbour].force();
             }
         }
     }
+}
+
+/// Was this block dropped by a particular stage?
+fn elided_by(block: &super::Block, reason: &str) -> bool {
+    block.elided.as_ref().is_some_and(|elision| elision.reason == reason)
 }
 
 #[cfg(test)]
@@ -105,6 +119,21 @@ mod tests {
 
         assert!(doc.blocks[0].kept());
         assert!(doc.blocks[0].elided.is_none(), "nothing is reported as removed");
+    }
+
+    #[test]
+    fn a_grouped_duplicate_next_to_an_error_stays_dropped() {
+        // The exception to the rescue above. This block is another report of a
+        // cause the view already shows, so bringing it back would return the
+        // cascade one neighbour at a time.
+        let mut doc = doc_of(&["error: mismatched types at 3", "error: boom"]);
+        let ctx = Ctx { exit_code: 0, context_blocks: 1, ..Ctx::default() };
+        classify::Classify.apply(&mut doc, &ctx);
+        doc.blocks[0].drop_with("cause");
+        Context.apply(&mut doc, &ctx);
+
+        assert!(!doc.blocks[0].kept());
+        assert!(doc.blocks[1].kept(), "the error itself is still forced");
     }
 
     #[test]
