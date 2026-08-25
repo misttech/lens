@@ -6,3 +6,4 @@ summary = "A forty-file working diff"
 claims = ["lens", "rtk"]
 command = "git diff"
 needle = "mod_31.py"
+sites = "mod_[0-9]+\\.py"

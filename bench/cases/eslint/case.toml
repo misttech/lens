@@ -7,3 +7,4 @@ claims = ["lens", "rtk"]
 command = "npx --no-install eslint ."
 rtk = "rtk lint"
 needle = "no-unused-vars"
+sites = "mod_[0-9]+\\.js"

@@ -83,6 +83,13 @@ pub fn classify_text(text: &str) -> Class {
             }
         }
 
+        // pytest marks the lines of a failed assertion with a leading `E`.
+        // Nothing in `E       assert 23 == 22` is a word this tree calls a
+        // failure, and it is the only line that says what went wrong.
+        if is_assertion_line(line) {
+            return Class::Failure;
+        }
+
         if is_failure_line(&lower) {
             // `error` in a message about a test that failed is a Failure;
             // standing alone it is an Error. Both outrank everything below, so
@@ -98,6 +105,14 @@ pub fn classify_text(text: &str) -> Class {
         }
     }
 
+    // rustc-style: the line that opens the finding carries a code and a
+    // message, and the location arrives underneath it. ruff prints
+    // `F401 [*] `os` imported but unused` and then ` --> mod.py:1:8`, so
+    // nothing on the opening line says it is a finding at all.
+    if class == Class::Info && text.lines().any(|line| arrow_location(line).is_some()) {
+        return Class::Error;
+    }
+
     if class == Class::Info {
         let trimmed = text.trim();
         if NOISE_WORDS.contains(&trimmed)
@@ -108,6 +123,32 @@ pub fn classify_text(text: &str) -> Class {
     }
 
     class
+}
+
+/// The path an arrow line points at: ` --> path:line:col`.
+///
+/// The second half of the rustc convention, and the half a linter uses when its
+/// opening line is only a code. Both numbers are required, for the same reason
+/// they are required of a prefix.
+pub(super) fn arrow_location(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("-->")?.trim_start();
+    let mut parts = rest.splitn(3, ':');
+    let path = parts.next()?;
+    let row = parts.next()?;
+    let column = parts.next()?;
+    let column = column.split_whitespace().next().unwrap_or(column);
+    if path.is_empty() || !is_number(row) || !is_number(column) {
+        return None;
+    }
+    Some(path)
+}
+
+/// Is this a line of a failed assertion, as pytest reports one?
+///
+/// `E` alone in the first column, then the assertion. Requiring the gap keeps
+/// it away from ordinary output that happens to begin with a capital E.
+fn is_assertion_line(line: &str) -> bool {
+    line.strip_prefix('E').is_some_and(|rest| rest.starts_with("  ") && !rest.trim().is_empty())
 }
 
 /// What follows a diagnostic's location prefix, if the line opens with one.

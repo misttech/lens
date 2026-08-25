@@ -76,6 +76,11 @@ class Case:
     claims: list[str] = field(default_factory=list)
     overrides: dict[str, str] = field(default_factory=dict)
     directory: Path = Path()
+    # A pattern matching the sites the output names — files, tests. Counting the
+    # distinct ones a view still names measures what a needle cannot: a summary
+    # that keeps the rule and twenty of the fifty files it applies to answers
+    # the needle and loses the reader thirty places to go.
+    sites: str = ""
 
     @property
     def setup(self) -> Path:
@@ -109,6 +114,7 @@ def load_cases(only: list[str] | None) -> list[Case]:
                 command=spec["command"],
                 needle=spec.get("needle", ""),
                 claims=spec.get("claims", []),
+                sites=spec.get("sites", ""),
                 overrides={k: spec[k] for k in ("rtk", "lens") if k in spec},
                 directory=path,
             )
@@ -165,9 +171,14 @@ def guest_script(cases: list[Case]) -> str:
                 lines.append(f'kept=$(printf "%s" "$out" | {found} || true)')
             else:
                 lines.append("kept=-1")
+            if case.sites:
+                counted = f"grep -oE {quote(case.sites)} | sort -u | wc -l"
+                lines.append(f'sites=$(printf "%s" "$out" | {counted} || true)')
+            else:
+                lines.append("sites=-1")
             lines.append(
                 f'printf \'{{"case":"{case.name}","arm":"{arm}",'
-                f'"bytes":%s,"kept":%s}}\\n\' "$bytes" "$kept"'
+                f'"bytes":%s,"kept":%s,"sites":%s}}\\n\' "$bytes" "$kept" "$sites"'
             )
     return "\n".join(lines)
 
@@ -219,7 +230,10 @@ def report(rows: list[dict], cases: list[Case]) -> None:
     for row in rows:
         by_case.setdefault(row["case"], {})[row["arm"]] = row
 
-    print(f"\n{'case':<15}{'arm':<9}{'bytes':>9}{'tokens':>8}{'cut':>7}   answer")
+    print(
+        f"\n{'case':<15}{'arm':<9}{'bytes':>9}{'tokens':>8}{'cut':>7}"
+        f"   {'answer':<7}sites"
+    )
     broken, lost = set(), []
     for case in cases:
         measured = by_case.get(case.name)
@@ -242,15 +256,24 @@ def report(rows: list[dict], cases: list[Case]) -> None:
                 answer = "LOST"
                 if case.name not in broken:
                     lost.append(row)
+            raw_sites = measured.get("raw", {}).get("sites", -1)
+            sites = row.get("sites", -1)
+            if sites < 0 or raw_sites <= 0:
+                coverage = ""
+            else:
+                coverage = f"{sites}/{raw_sites}"
+                if arm != "raw" and sites < raw_sites:
+                    coverage += " !"
             print(
                 f"{case.name if arm == 'raw' else '':<15}{arm:<9}{size:>9}"
-                f"{size // BYTES_PER_TOKEN:>8}{cut:>7}   {answer}"
+                f"{size // BYTES_PER_TOKEN:>8}{cut:>7}   {answer:<7}{coverage}"
             )
 
     print(
         f"\ntokens are bytes/{BYTES_PER_TOKEN}, the estimate the other tool publishes"
     )
     print("only tools that claim a command are run against it")
+    print("sites: distinct files or tests the view still names, against raw")
 
     if broken:
         # The needle is absent from the unfiltered output, so the case cannot
