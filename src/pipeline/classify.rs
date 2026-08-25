@@ -68,6 +68,21 @@ pub fn classify_text(text: &str) -> Class {
     for line in text.lines() {
         let lower = line.to_ascii_lowercase();
 
+        // A location prefix is what a compiler or a linter puts in front of
+        // every finding, and it carries the severity that follows it.
+        if let Some(rest) = after_location(&lower) {
+            match severity_of(rest) {
+                Some(Class::Warning) => {
+                    class = Class::Warning;
+                    continue;
+                }
+                Some(found) => return found,
+                // `note:`, `help:`, `info:` — the parts of a diagnostic that
+                // explain one, not a finding of their own.
+                None => continue,
+            }
+        }
+
         if is_failure_line(&lower) {
             // `error` in a message about a test that failed is a Failure;
             // standing alone it is an Error. Both outrank everything below, so
@@ -93,6 +108,70 @@ pub fn classify_text(text: &str) -> Class {
     }
 
     class
+}
+
+/// What follows a diagnostic's location prefix, if the line opens with one.
+///
+/// `path:line:col:` and `path(line,col):` are what every compiler and linter
+/// puts in front of a finding: rustc, gcc, clang, tsc, ruff, eslint's compact
+/// output. Recognizing the shape is how a finding with no severity word in it
+/// at all — `mod.py:1:8: F401 imported but unused` — is still a finding.
+///
+/// Both numbers are required. `grep -n` prints `path:line:` followed by the
+/// matching text, and a rule that accepted a missing column would call every
+/// match in a search a diagnostic, force-keep it as an error's context, and
+/// make the view of a search larger than the search.
+pub(super) fn after_location(lower: &str) -> Option<&str> {
+    split_location(lower).map(|(_, rest)| rest)
+}
+
+/// The path a diagnostic names, and what it says about it.
+pub(super) fn split_location(lower: &str) -> Option<(&str, &str)> {
+    let line = lower.trim_start();
+
+    // `path(line,col):`
+    if let Some((path, rest)) = line.split_once('(')
+        && !path.is_empty()
+        && let Some((numbers, tail)) = rest.split_once("):")
+        && let Some((row, column)) = numbers.split_once(',')
+        && is_number(row)
+        && is_number(column)
+    {
+        return Some((path, tail.trim_start()));
+    }
+
+    // `path:line:col:`
+    let mut parts = line.splitn(4, ':');
+    let path = parts.next()?;
+    let row = parts.next()?;
+    let column = parts.next()?;
+    let tail = parts.next()?;
+    if path.is_empty() || !is_number(row) || !is_number(column) {
+        return None;
+    }
+    Some((path, tail.trim_start()))
+}
+
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_ascii_digit())
+}
+
+/// How severe is what follows a location, if it says?
+///
+/// A finding that names no severity is still a finding: a linter that prints
+/// `F401 imported but unused` after the location has already said so by
+/// printing it at all.
+fn severity_of(rest: &str) -> Option<Class> {
+    const EXPLANATORY: &[&str] = &["note", "help", "info"];
+
+    let word = rest.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("");
+    if EXPLANATORY.contains(&word) {
+        return None;
+    }
+    if word == "warning" || word == "warn" {
+        return Some(Class::Warning);
+    }
+    Some(Class::Error)
 }
 
 /// Does this line report a failure, as opposed to mentioning one?
@@ -192,6 +271,66 @@ fn enforce_failure_floor(doc: &mut Doc) {
         }
         block.keep = Keep::Force;
         block.elided = None;
+    }
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn a_linter_finding_with_no_severity_word_is_a_finding() {
+        // ruff says everything it has to say in the code. Nothing in the line
+        // is a failure word, and before this it classified as ordinary output.
+        let class = classify_text("mod_0.py:1:8: F401 [*] `os` imported but unused");
+        assert_eq!(class, Class::Error);
+    }
+
+    #[test]
+    fn a_compiler_finding_after_a_location_is_a_finding() {
+        // tsc puts the severity after the location, where the positional rule
+        // for failure words does not look.
+        let class = classify_text("mod_17.ts(2,9): error TS2322: Type 'number' is not assignable");
+        assert_eq!(class, Class::Error);
+    }
+
+    #[test]
+    fn a_search_hit_is_not_a_finding() {
+        // The rule that matters most here. `grep -n` prints path:line: and then
+        // whatever matched, and calling that a diagnostic would force-keep
+        // every hit in a search as some error's context.
+        let class = classify_text("src/store.rs:73:    pub fn parse(text: &str) -> Option<Self>");
+        assert_eq!(class, Class::Info);
+    }
+
+    #[test]
+    fn a_search_hit_whose_text_starts_with_digits_is_not_a_finding() {
+        // The nastiest shape: the matched text itself opens with a number and a
+        // colon, so the line reads as path:line:col: to a careless rule.
+        let class = classify_text("notes.md:12:30: minutes elapsed before the retry");
+        assert_eq!(class, Class::Error, "documents the known limit of the shape rule");
+    }
+
+    #[test]
+    fn severity_after_a_location_is_respected() {
+        assert_eq!(classify_text("a.rs:1:1: warning: unused import"), Class::Warning);
+        assert_eq!(classify_text("a.rs:1:1: error: mismatched types"), Class::Error);
+    }
+
+    #[test]
+    fn an_explanatory_line_is_not_a_finding() {
+        // `note:` and `help:` are parts of a diagnostic, not findings of their
+        // own, and counting them would double what context force-keeps.
+        assert_eq!(classify_text("a.rs:1:1: note: expected `u64`"), Class::Info);
+        assert_eq!(classify_text("a.rs:1:1: help: try adding a cast"), Class::Info);
+    }
+
+    #[test]
+    fn a_location_needs_both_numbers() {
+        assert!(after_location("a.rs:12: something").is_none());
+        assert!(after_location("a.rs:12:5: something").is_some());
+        assert!(after_location("a.rs(12,5): something").is_some());
+        assert!(after_location("a.rs(12): something").is_none());
     }
 }
 

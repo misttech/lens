@@ -22,7 +22,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::dedupe::normalize;
-use super::{Block, Class, Ctx, Doc, Stage};
+use super::{Block, Class, Ctx, Doc, Line, Stage};
 
 /// Below this a group is not a cascade. Two of the same message is a pair, and
 /// a marker in place of the second one saves nothing worth the sentence.
@@ -38,6 +38,10 @@ impl Stage for Cause {
     }
 
     fn apply(&self, doc: &mut Doc, _ctx: &Ctx) {
+        for block in &mut doc.blocks {
+            group_within(block);
+        }
+
         let keys: Vec<Option<String>> = doc.blocks.iter().map(key_for).collect();
 
         let mut counts: HashMap<&str, usize> = HashMap::new();
@@ -60,6 +64,71 @@ impl Stage for Cause {
             doc.blocks[index].drop_with("cause");
         }
     }
+}
+
+/// Collapse repeated reports inside one block.
+///
+/// Whether a hundred findings arrive as a hundred blocks or as one is a
+/// question about the producer's blank lines, not about the findings. rustc
+/// separates its diagnostics and tsc does not, so the same cascade is block
+/// work in one and line work in the other, and grouping only blocks would be
+/// grouping only the tools that happen to double-space.
+///
+/// [`super::dedupe`] will not do this either: it refuses to collapse a line
+/// that reports a failure, by a deliberate rule that keeps a failing command's
+/// output intact. The first report of each cause survives here for the same
+/// reason.
+fn group_within(block: &mut Block) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in &block.lines {
+        if let Some(key) = line_key(&line.text) {
+            *counts.entry(key).or_default() += 1;
+        }
+    }
+    if !counts.values().any(|count| *count >= MIN_GROUP) {
+        return;
+    }
+
+    // Counted per cause across the whole block rather than per run of adjacent
+    // lines. tsc interleaves two findings per file, so a running count resets on
+    // every other line and reports two of thirty.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut kept: Vec<Line> = Vec::with_capacity(block.lines.len());
+
+    for mut line in std::mem::take(&mut block.lines) {
+        match line_key(&line.text).filter(|key| counts[key] >= MIN_GROUP) {
+            Some(key) => {
+                if seen.insert(key.clone()) {
+                    // The first report carries the count for all of them.
+                    line.text.push_str(&format!("  [lens: ×{}]", counts[&key]));
+                    kept.push(line);
+                }
+            }
+            None => kept.push(line),
+        }
+    }
+
+    block.lines = kept;
+}
+
+/// The cause a single line reports, or `None` when it does not report one.
+///
+/// A line is a report when it opens with a diagnostic's location, or when
+/// classification alone calls it one. Ordinary output is never grouped here:
+/// two identical lines of program output are [`super::dedupe`]'s business.
+fn line_key(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+
+    // A line that names its own file keys on that file as well as its message.
+    // The same cause at thirty sites in one file is a cascade; the same cause
+    // in thirty different files is thirty files a reader has to visit, and
+    // flattening the paths into one takes twenty-nine of them out of the view.
+    if let Some((path, rest)) = super::classify::split_location(&lower) {
+        return Some(format!("{path}\u{1}{}", normalize(rest)));
+    }
+
+    matches!(super::classify::classify_text(text), Class::Error | Class::Failure | Class::Warning)
+        .then(|| normalize(text))
 }
 
 /// The cause a block reports, or `None` when it does not report one.
@@ -178,5 +247,118 @@ mod tests {
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let doc = run(&refs);
         assert!(kept(&doc).iter().any(|text| text.contains("mismatched types")));
+    }
+
+    /// A single block holding `lines`, which is what flat tool output parses to.
+    fn flat(lines: &[&str]) -> Block {
+        Block::new(
+            lines
+                .iter()
+                .enumerate()
+                .map(|(index, text)| Line { text: (*text).to_string(), origin: index + 1 })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn reports_inside_one_block_are_grouped() {
+        // Whether findings arrive as blocks or as lines is a question about the
+        // producer's blank lines. tsc does not print any.
+        let mut block = flat(&[
+            "mod.ts(2,9): error TS2322: bad type",
+            "mod.ts(9,4): error TS2322: bad type",
+            "mod.ts(14,7): error TS2322: bad type",
+        ]);
+        group_within(&mut block);
+        assert_eq!(block.lines.len(), 1);
+        assert_eq!(block.lines[0].text, "mod.ts(2,9): error TS2322: bad type  [lens: ×3]");
+    }
+
+    #[test]
+    fn interleaved_causes_are_counted_separately() {
+        // The bug this pins: two findings per file, alternating, and a count
+        // that resets on every other line reports two of thirty.
+        let mut lines = Vec::new();
+        for n in 0..12 {
+            lines.push(format!("mod.ts({n},9): error TS2322: bad type"));
+            lines.push(format!("mod.ts({n},4): error TS2339: no such property"));
+        }
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let mut block = flat(&refs);
+        group_within(&mut block);
+
+        assert_eq!(block.lines.len(), 2);
+        assert!(block.lines[0].text.ends_with("[lens: ×12]"), "{}", block.lines[0].text);
+        assert!(block.lines[1].text.ends_with("[lens: ×12]"), "{}", block.lines[1].text);
+    }
+
+    #[test]
+    fn ordinary_lines_in_a_block_are_left_alone() {
+        // Only reports are grouped. Everything else in the block is untouched,
+        // in its original order.
+        let mut block = flat(&[
+            "running 3 checks",
+            "a.rs:1:1: error: broken",
+            "a.rs:2:1: error: broken",
+            "a.rs:3:1: error: broken",
+            "done",
+        ]);
+        group_within(&mut block);
+        assert_eq!(block.lines.len(), 3);
+        assert_eq!(block.lines[0].text, "running 3 checks");
+        assert!(block.lines[1].text.ends_with("[lens: ×3]"));
+        assert_eq!(block.lines[2].text, "done");
+    }
+
+    #[test]
+    fn a_pair_inside_a_block_is_left_alone() {
+        let mut block = flat(&["a.rs:1:1: error: broken", "a.rs:2:1: error: broken"]);
+        group_within(&mut block);
+        assert_eq!(block.lines.len(), 2);
+    }
+
+    #[test]
+    fn grouping_never_renumbers() {
+        // Line addressability: the lines that survive keep the origin they had
+        // in the raw stream, whatever was removed around them.
+        let mut block = flat(&[
+            "keep me",
+            "a.rs:1:1: error: broken",
+            "a.rs:2:1: error: broken",
+            "a.rs:3:1: error: broken",
+            "tail",
+        ]);
+        group_within(&mut block);
+        assert_eq!(block.lines[0].origin, 1);
+        assert_eq!(block.lines[1].origin, 2);
+        assert_eq!(block.lines[2].origin, 5);
+    }
+
+    #[test]
+    fn the_same_cause_in_different_files_is_not_grouped() {
+        // Thirty files with one fault each is thirty places a reader has to
+        // visit. Grouping them keeps one path and takes twenty-nine out of the
+        // view, which the fidelity column caught as a lost answer.
+        let mut block = flat(&[
+            "mod_0.ts(2,9): error TS2322: bad type",
+            "mod_1.ts(2,9): error TS2322: bad type",
+            "mod_2.ts(2,9): error TS2322: bad type",
+        ]);
+        group_within(&mut block);
+        assert_eq!(block.lines.len(), 3, "every file is still named");
+    }
+
+    #[test]
+    fn the_same_cause_in_one_file_is_grouped() {
+        // The cascade this stage exists for: one fault reported at every use
+        // site in the same file.
+        let mut block = flat(&[
+            "src/lib.rs:3:9: error: mismatched types",
+            "src/lib.rs:8:9: error: mismatched types",
+            "src/lib.rs:13:9: error: mismatched types",
+        ]);
+        group_within(&mut block);
+        assert_eq!(block.lines.len(), 1);
+        assert!(block.lines[0].text.ends_with("[lens: ×3]"), "{}", block.lines[0].text);
     }
 }

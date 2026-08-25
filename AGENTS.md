@@ -273,7 +273,7 @@ says, on the twelve cases that measure anything:
 | grep | 18,541 | 18,541 (0%) | 12,230 (35%) |
 | eslint | 12,324 | 595 (95%) | 1,036 (92%) |
 | git diff | 9,151 | 9,151 (0%) | 6,068 (34%) |
-| tsc | 5,049 | 5,063 (0%) | 5,178 (-2%) |
+| tsc | 5,049 | 5,049 (0%) | 5,178 (-2%) |
 | git log | 4,947 | 3,263 (35%) | 410 (92%) |
 | cargo test | 3,651 | 3,391 (8%) | 1,140 (69%) |
 | pytest | 2,071 | 2,071 (0%) | 813 (61%) |
@@ -295,9 +295,13 @@ difference is the lint identifier, which the smaller view spends. It renders one
 group as `_`, drops `clippy::needless_return`, and turns 87 of every 90
 locations into "+87 more".
 
-Where it still does nothing is where `classify` does not call the line a
-diagnostic. ruff, pytest and tsc print findings that no stage labels as errors,
-so nothing groups them. That is the next measurement, not a mystery.
+Where it still does nothing has two named reasons, neither of them a mystery.
+
+`ruff` prints rustc-style: a message line carrying only a code, and the location
+on a `-->` continuation beneath it. Nothing on the line that opens the finding
+says it is one. `pytest` reports an assertion, and `assert 23 == 22` contains no
+word this tree calls a failure. Both need `classify` to learn a shape, and the
+suite already scores what that would be worth.
 
 `bench/session.py` is the paired-session benchmark, deliberately built to the
 same design the other tool publishes so the numbers can be argued about instead
