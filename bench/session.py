@@ -262,12 +262,31 @@ def parse_transcript(text: str, session: Session) -> None:
             session.api_calls = int(event.get("num_turns", 0) or 0)
             session.duration_ms = int(event.get("duration_api_ms", 0) or 0)
 
-    # A mandated command counts as run when it appears in a Bash call, with or
-    # without the filter prefix the filtered arm was told to add.
-    for command in AUDIT_COMMANDS:
-        needle = command.split()[0] + " " + " ".join(command.split()[1:3])
-        if any(needle in call for call in ran):
-            session.commands_run += 1
+    session.commands_run = count_run(ran)
+
+
+def count_run(calls: list[str]) -> int:
+    """How many mandated commands were actually run.
+
+    Matched against the first line of the call, with any filter prefix stripped,
+    rather than anywhere in its text. A command that writes a script containing
+    these command lines — a heredoc, a generated runner — otherwise counts as
+    having run every one of them, which was measured happening on a real
+    transcript that had never been given this task.
+    """
+    issued = set()
+    for call in calls:
+        first = call.strip().splitlines()[0].strip() if call.strip() else ""
+        for prefix in ("lens ", "rtk "):
+            if first.startswith(prefix):
+                first = first[len(prefix) :].lstrip()
+        issued.add(first)
+
+    return sum(
+        1
+        for command in AUDIT_COMMANDS
+        if any(line == command or line.startswith(command) for line in issued)
+    )
 
 
 def run_session(
