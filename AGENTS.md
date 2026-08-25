@@ -247,6 +247,41 @@ Networking needs `CAP_NET_ADMIN` on the sandbox CLI, so an ungranted binary
 fails every cell with a tap-device error. It is recorded as a cell the agent
 never attempted, which keeps it out of the success rate.
 
+### Two benchmarks that are not the retention curve
+
+`bench/compare.py` measures compression with no model in the loop. Compression
+is deterministic, so it costs nothing: run the command raw, run it under each
+filter, count the bytes — both filters in one microVM, so the git, python and
+rustc they read are the same build. It reports a second column that a
+compression table usually omits: whether the line the command was run for is
+still in the view. That column pays for itself. `rtk grep "pub fn" src/` returns
+36 bytes against 5,944 raw, a 99% reduction, and the content is
+`grep: src/: Is a directory`.
+
+`bench/session.py` is the paired-session benchmark, deliberately built to the
+same design the other tool publishes so the numbers can be argued about instead
+of the method: N pairs of microVMs, one arm filtered and one not, identical
+prompt, model and flags, a fixed command sequence so both arms do the same work.
+Two differences, both on purpose.
+
+Bytes are counted **per tool result in the transcript**, not from the command.
+What the agent's harness delivered is what the model was charged for, and a
+harness that truncates a 191KB output before the model sees it has already done
+most of the filtering. Measuring the command instead credits the filter with a
+saving the control never paid — which is the likeliest way to publish a number
+that is real and means nothing.
+
+Sessions are **verified**: a session that ran nine of its twelve commands is
+cheaper than one that ran twelve, and cost per session with nothing checking the
+work rewards exactly that. Incomplete sessions are dropped from the comparison
+rather than averaged into it.
+
+The test is a paired permutation test with a bootstrap interval, not a t-test:
+these distributions are small, skewed, and occasionally carry a 2x outlier,
+which is the case a t-test handles worst. It has a floor worth knowing — with n
+pairs the smallest two-sided p it can produce is 2/2^n, so a five-pair run
+cannot come back significant however large the effect. The default is eight.
+
 ## Platform
 
 Linux is the verified target. macOS compiles and its branches are written but

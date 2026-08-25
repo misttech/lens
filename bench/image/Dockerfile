@@ -22,7 +22,9 @@ COPY rtk /usr/local/bin/rtk
 # underneath the curve, which is the same failure the binary fingerprint guards
 # against on the filter side.
 COPY agent /opt/agent
-RUN ln -s /opt/agent/cursor-agent /usr/local/bin/cursor-agent
+COPY claude /usr/local/bin/claude
+RUN ln -s /opt/agent/cursor-agent /usr/local/bin/cursor-agent \
+ && chmod 0755 /usr/local/bin/claude
 
 # The harness mounts one task directory read-only. The mount point has to exist
 # on the read-only root before the guest will accept the mount.

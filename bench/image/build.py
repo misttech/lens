@@ -52,6 +52,11 @@ IMAGE = "lens-bench:0.1"
 # the version is a directory name the results can record.
 AGENT_VERSIONS = Path.home() / ".local/share/cursor-agent/versions"
 
+# The other driver is a single executable rather than a tree, and the paired
+# session benchmark needs it: it is the one whose transcript reports per-tool
+# result bytes.
+CLAUDE_VERSIONS = Path.home() / ".local/share/claude/versions"
+
 
 def run(*args: str, **kwargs) -> subprocess.CompletedProcess:
     print(f"    $ {' '.join(args)}", flush=True)
@@ -119,6 +124,22 @@ def newest_agent() -> Path | None:
     return versions[-1] if versions else None
 
 
+def newest_claude() -> Path | None:
+    if not CLAUDE_VERSIONS.is_dir():
+        return None
+
+    # Version directories sort lexically, which puts 2.1.9 above 2.1.241. Sort
+    # by the numbers instead, or the image pins whichever version reads latest
+    # rather than whichever is.
+    def key(path: Path) -> tuple:
+        return tuple(
+            int(part) if part.isdigit() else 0 for part in path.name.split(".")
+        )
+
+    versions = sorted((p for p in CLAUDE_VERSIONS.iterdir() if p.is_file()), key=key)
+    return versions[-1] if versions else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -133,6 +154,12 @@ def main() -> int:
         default=None,
         help="agent install directory to bake in (default: the newest local one)",
     )
+    parser.add_argument(
+        "--claude",
+        type=Path,
+        default=None,
+        help="claude executable to bake in (default: the newest local one)",
+    )
     args = parser.parse_args()
 
     agent = args.agent or newest_agent()
@@ -140,6 +167,10 @@ def main() -> int:
         raise SystemExit(
             "no agent install found — pass --agent DIR with one to bake in"
         )
+
+    claude = args.claude or newest_claude()
+    if claude is None:
+        raise SystemExit("no claude executable found — pass --claude PATH")
 
     with tempfile.TemporaryDirectory(prefix="lens-image-") as tmp:
         staging = Path(tmp)
@@ -151,12 +182,15 @@ def main() -> int:
         print("agent:")
         version = copy_agent(staging, agent)
         print(f"    pinned {version}")
+        print("claude:")
+        shutil.copy2(claude, staging / "claude")
+        print(f"    pinned {claude.name}")
         print("image:")
         run("docker", "build", "-t", IMAGE, str(staging))
         args.archive.parent.mkdir(parents=True, exist_ok=True)
         run("docker", "save", IMAGE, "-o", str(args.archive))
 
-    print(f"\n{args.archive}  (agent {version})")
+    print(f"\n{args.archive}  (agent {version}, claude {claude.name})")
     print("load it into the sandbox with its image-load verb, e.g.")
     print(f"    <sandbox> image load -i {args.archive} -t lens-bench")
     return 0
