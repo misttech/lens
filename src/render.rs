@@ -86,10 +86,24 @@ fn summary(doc: &Doc, handle: Option<&str>) -> String {
         if warnings == 1 { "" } else { "s" }
     );
 
+    // One line of the output itself. Counts alone send the reader to go and
+    // find what happened, and both agents measured here do two to three times
+    // the work when handed them — fifteen tool calls against six on a cascade.
+    // A view this small cannot say much; saying nothing costs more than raw.
+    let anchor = anchor(doc);
+    if let Some(line) = anchor {
+        out.push('\n');
+        out.push_str(line);
+    }
+
     if doc.line_count() > 0 {
         out.push('\n');
-        let mut all =
-            Pending { lines: doc.line_count(), blocks: doc.blocks.len(), ..Default::default() };
+        let mut all = Pending {
+            // The anchor is shown, so it is not among what is missing.
+            lines: doc.line_count() - usize::from(anchor.is_some()),
+            blocks: doc.blocks.len(),
+            ..Default::default()
+        };
         all.reason = Some("this view is counts only");
         out.push_str(&marker(&all, handle));
         out.push('\n');
@@ -97,11 +111,23 @@ fn summary(doc: &Doc, handle: Option<&str>) -> String {
     out
 }
 
-/// The kept blocks, with a marker wherever a run of them was left out.
+/// The one line worth carrying at level 0.
 ///
-/// Markers are placed inline rather than gathered at the end, so the reader
-/// learns *where* the gap is. A summary at the bottom says how much is missing;
-/// a marker in position says what it was between.
+/// A failure if there is one — it is why the reader is looking. Otherwise the
+/// last line, because a command that succeeded conventionally ends with its
+/// result: the key it wanted, the summary it counted, the path it wrote.
+fn anchor(doc: &Doc) -> Option<&str> {
+    if let Some(block) = doc.blocks.iter().find(|block| is_failure(block.class)) {
+        return block.lines.first().map(|line| line.text.as_str());
+    }
+    doc.blocks
+        .iter()
+        .rev()
+        .flat_map(|block| block.lines.iter().rev())
+        .map(|line| line.text.as_str())
+        .find(|text| !text.trim().is_empty())
+}
+
 /// How many lines a level 1 view shows when there is no failure to show.
 ///
 /// Enough to recognize what the command produced and to see the shape of it.
@@ -154,6 +180,11 @@ fn head(doc: &Doc, handle: Option<&str>) -> String {
     out
 }
 
+/// The kept blocks, with a marker wherever a run of them was left out.
+///
+/// Markers are placed inline rather than gathered at the end, so the reader
+/// learns *where* the gap is. A summary at the bottom says how much is missing;
+/// a marker in position says what it was between.
 fn body(doc: &Doc, handle: Option<&str>, failures_only: bool) -> String {
     let mut out = String::new();
     let mut pending = Pending::default();
@@ -405,6 +436,33 @@ mod tests {
         assert!(out.contains("error: boom"));
         assert!(!out.contains("teardown"));
         assert!(has_marker(&out));
+    }
+
+    #[test]
+    fn level_zero_names_the_failure() {
+        // Counts alone made the reader go and find what happened, and both
+        // agents measured did two to three times the work.
+        let d = filtered("building\n\nerror: could not compile sessions\n", 1);
+        let out = render(&d, Level::Summary, Some("h"));
+        assert!(out.contains("could not compile"), "{out:?}");
+        assert!(out.contains("failing"), "the counts are still there: {out:?}");
+    }
+
+    #[test]
+    fn level_zero_ends_on_the_last_line_when_nothing_failed() {
+        // A command that succeeded ends with its result: the key it wanted, the
+        // summary it counted. That is the line worth the one slot there is.
+        let text = "checking\n\nsummary: 1200 checked\n\nrequired key: retry_after_ms\n";
+        let out = render(&filtered(text, 0), Level::Summary, Some("h"));
+        assert!(out.contains("required key: retry_after_ms"), "{out:?}");
+    }
+
+    #[test]
+    fn level_zero_does_not_count_the_line_it_shows() {
+        let d = filtered("one\n\ntwo\n\nthree\n", 0);
+        let out = render(&d, Level::Summary, Some("h"));
+        assert!(out.contains("3 lines"), "the total is the total: {out:?}");
+        assert!(out.contains("2 lines not shown"), "the missing count is: {out:?}");
     }
 
     #[test]

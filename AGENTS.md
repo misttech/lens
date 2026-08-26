@@ -127,11 +127,19 @@ and 1.00 while reading a fraction of the bytes — 1,453 of 49,556 on
 against four, six against six. This agent does the same work either way, so
 what the filter saves on the way in is not what the session is made of.
 
-**Level 0 is the worst view in the tree, and by a distance.** 2.32x on
-`cargo-cascade` with nine tool calls against four, 2.96x on `cascading-errors`
-with fifteen against six. A view that reports counts instead of content sends
-the agent to do the reading itself, and it does two to three times the work. It
-has cost more than raw in every curve recorded here.
+**Level 0 was the worst view in the tree**: 2.32x on `cargo-cascade` with nine
+tool calls against four, 2.96x on `cascading-errors` with fifteen against six. A
+view of counts alone sent the agent to do the reading itself and it did two to
+three times the work. It now carries one line of the output — the failure, or
+the last line when nothing failed — and the worst cell went from 2.96x to 0.98x
+with the tool calls back to six. The table above predates that change; the three
+cells re-measured after it read 0.98, 1.89 and 1.49.
+
+What the two that did not move say is that one line cannot answer every
+question. `mid-stream-trap` hides its answer in the middle, where no anchor
+reaches it, and the agent runs the command again — which is the same mechanism
+level 1 shows on `last-line-trap`, and the reason level 0 still costs more than
+raw wherever its one line is not the one wanted.
 
 The one clear win is `mid-stream-trap` at 0.79, where the answer is a single
 line in the middle of 4,800 and the filter hands it over directly.
