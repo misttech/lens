@@ -1,0 +1,21 @@
+# Copyright 2026 Mist Tecnologia LTDA. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "cargo-cascade"
+summary = "One root cause through a command both filters claim"
+
+# The other tasks run sh, python3 and rustc, none of which the filter this is
+# compared against offers to touch. An arm running it there measures its
+# coverage, not its quality. cargo build is on both tools' lists, so this is the
+# cell where a comparison means something.
+prompt = """
+This crate does not compile. Build it with:
+
+    {lens} cargo build --offline
+
+Find the root cause, fix src/lib.rs so it compiles, and build again to confirm.
+Keep the behaviour: a session with no expiry never expires.
+"""
+
+turn_limit = 20
+timeout_s = 420

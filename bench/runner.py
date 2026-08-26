@@ -73,12 +73,16 @@ BASELINES = {
 # Levels are the sweep this build can offer. A token budget is a knob the
 # ranking stages have not grown yet, and inventing one here would measure
 # nothing.
-VARIANTS: dict[str, dict[str, str]] = {
-    "raw": {"LENS_MODE": "raw"},
-    "level3": {"LENS_LEVEL": "3"},
-    "level2": {"LENS_LEVEL": "2"},
-    "level1": {"LENS_LEVEL": "1"},
-    "level0": {"LENS_LEVEL": "0"},
+# Each variant names the filter it types and the environment it types it in.
+# The other filter is a variant rather than a second benchmark: same task, same
+# prompt, same verification, and only the tool in front of the command differs.
+VARIANTS: dict[str, dict] = {
+    "raw": {"tool": "lens", "env": {"LENS_MODE": "raw"}},
+    "level3": {"tool": "lens", "env": {"LENS_LEVEL": "3"}},
+    "level2": {"tool": "lens", "env": {"LENS_LEVEL": "2"}},
+    "level1": {"tool": "lens", "env": {"LENS_LEVEL": "1"}},
+    "level0": {"tool": "lens", "env": {"LENS_LEVEL": "0"}},
+    "rtk": {"tool": "rtk", "env": {}},
 }
 
 DEFAULT_VARIANTS = ["raw", "level2", "level1", "level0"]
@@ -211,6 +215,24 @@ def binary_fingerprint() -> str:
     return f"{digest} ({binary.stat().st_size} bytes)"
 
 
+def filter_binary(tool: str) -> Path:
+    """Where a variant's filter lives.
+
+    The other filter is not built here, so it is found rather than located: an
+    installed one, or the path in LENS_RTK.
+    """
+    if tool == "lens":
+        return lens_binary()
+
+    override = os.environ.get("LENS_RTK")
+    if override:
+        return Path(override)
+    found = shutil.which(tool)
+    if found is None:
+        raise SystemExit(f"no {tool} on PATH — set LENS_RTK to the binary")
+    return Path(found)
+
+
 def lens_binary() -> Path:
     """The binary under test, built by `make build`."""
     target = os.uname().sysname.lower()
@@ -308,18 +330,19 @@ def run_agent(
     benchmark exists to detect — a filter that saves tokens per call by causing
     more calls has not saved anything.
     """
-    # `lens` on PATH, so every variant's prompt is the same string and the only
-    # difference between arms is what the command shows.
+    # The filter on PATH under its own name, so every variant's prompt is the
+    # same shape and the only difference between arms is what the command shows.
+    tool = VARIANTS[variant]["tool"]
     bin_dir = work / ".bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    link = bin_dir / "lens"
+    link = bin_dir / tool
     if not link.exists():
-        link.symlink_to(lens_binary())
+        link.symlink_to(filter_binary(tool))
 
-    prompt = task.prompt.replace("{lens}", "lens").strip()
+    prompt = task.prompt.replace("{lens}", tool).strip()
 
     env = dict(os.environ)
-    env.update(VARIANTS[variant])
+    env.update(VARIANTS[variant]["env"])
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
     # Isolate the store and log: a benchmark must not read or write a
     # developer's real cache.
@@ -366,9 +389,9 @@ def guest_script(task: Task, variant: str, model: str, driver: str) -> str:
     """
     assignments = " ".join(
         f"{name}={shlex.quote(value)}"
-        for name, value in sorted(VARIANTS[variant].items())
+        for name, value in sorted(VARIANTS[variant]["env"].items())
     )
-    prompt = task.prompt.replace("{lens}", "lens").strip()
+    prompt = task.prompt.replace("{lens}", VARIANTS[variant]["tool"]).strip()
     agent = " ".join(
         shlex.quote(arg)
         for arg in agent_command(driver, prompt, model, task.turn_limit)

@@ -159,6 +159,33 @@ seen twice.
 Level 0 costs more than showing the output on three tasks of four, as it has in
 every curve so far.
 
+### The other filter as an arm
+
+`--variants rtk` runs the same cells through the filter this one is compared
+against: same task, same prompt, same verification, and only the tool in front
+of the command differs. `bench/tasks/cargo-cascade` exists for it — the other
+tasks run `sh`, `python3` and `rustc`, none of which that tool offers to touch,
+so an arm there would measure its coverage rather than its quality. `cargo
+build` is on both lists.
+
+On that task, three runs each through cursor:
+
+| arm | bytes it reads | median tokens | against raw |
+|---|---|---|---|
+| raw | 49,556 | 76,291 | 1.00 |
+| the other filter | 49,285 | 76,230 | 1.00 |
+| level 2 | 1,453 | 93,102 | 1.22 |
+
+A 97% byte reduction that costs 22% more, against a 0.5% reduction that costs
+nothing. The level 2 cells are bimodal — 76k, 93k, 96k — so what the number says
+is that this agent sometimes does more work when handed the smaller view, not
+that it always does.
+
+The same two cells through the other agent came back 77,329 and 77,531, with
+three tool calls and four turns each. So the extra work is one agent's habit
+rather than a property of the view, which is the same lesson every curve here
+has taught, and the reason both are committed.
+
 ### The trap the suite was missing
 
 `last-line-trap` puts the critical line last, where any harness that truncates
