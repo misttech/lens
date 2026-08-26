@@ -130,52 +130,34 @@ matters was going the wrong way.
 ### The same curve through a second agent
 
 `bench/results/retention-cursor.json` runs the cells through a different agent
-and a different model family, against the merged tree: four tasks, four
-variants, three runs each. Success is 100% in all 48 cells and there is no knee.
-The token picture is not Sonnet's — the trap task at level 2 costs 0.73x its
-control here and 1.25x there — but the two files were recorded either side of
-the marker change, so that gap is not agent alone.
+and a different model family: four tasks, four variants, three runs each,
+recorded after cause grouping, the classify shapes, excerpt suppression and the
+level 1 fix. Success is 100% in all 48 cells and there is no knee.
 
-Counting cells that beat their control is the wrong summary, because a cell can
-only win where there is something to remove. Bytes handed to the agent, against
-what the cell cost:
+| task | raw | level 2 | level 1 | level 0 |
+|---|---|---|---|---|
+| cascading-errors | 1.00 | 0.98 | 0.83 | 1.46 |
+| fix-failing-test | 1.00 | 1.00 | 0.59 | 0.71 |
+| last-line-trap | 1.00 | 0.71 | 1.25 | 1.29 |
+| mid-stream-trap | 1.00 | 0.72 | 0.71 | 1.26 |
 
-| task | raw | level 2 | level 1 | L2 | L1 | L0 |
-|---|---|---|---|---|---|---|
-| last-line-trap | 191,039 | 369 | 65 | 0.73x | 1.25x | 1.24x |
-| mid-stream-trap | 158,977 | 752 | 64 | 0.74x | 1.27x | 1.29x |
-| fix-failing-test | 29,945 | 29,940 | 347 | 1.01x | 0.58x | 0.97x |
-| fix-compile-error | 2,246 | 2,240 | 2,088 | 1.11x | 0.82x | 1.31x |
+Two things in that table are worth more than the ratios.
 
-The two large-output tasks land on the same number, 0.73x and 0.74x, from
-191KB of service checks and 159KB of migration batches. That is the size of the
-effect on this agent: a quarter of the session, not the 99.5% the byte column
-suggests. Most of what an agent spends is prompt, history and its own output,
-and a harness that truncates long output has already taken the rest.
+**`cascading-errors` at level 2 is 0.98.** The view it reads is 872 bytes
+against 47,997 — a 98% cut — and the session costs 2% less. Everything else the
+agent spends is reading the file, editing it and building again, and no filter
+touches any of that. A compression number is an upper bound on a saving that
+mostly does not arrive.
 
-The ratio tracks whether the view kept the line the task needed, cell by cell.
-Level 1 keeps the failing test and costs 0.58x; level 1 drops the token on both
-traps and costs more than not filtering at all. No cell that lost the answer
-came out cheap. Level 0 costs more than showing the output on three tasks of
-four.
+**Level 1 on `mid-stream-trap` went from 1.27 to 0.71** when that level stopped
+rendering an empty view. It was costing more than not filtering because an agent
+shown nothing runs the command again. The same cell on `last-line-trap` is still
+1.25: the answer there is the last line of five thousand, a twenty-line head
+does not contain it, and the agent re-runs. Both numbers are the same mechanism
+seen twice.
 
-`fix-compile-error` carried no signal: its raw output was 2KB, so nothing the
-filter did could move the tokens, and a single 208k run against a 127k median
-was the whole of its level 2 result. `cascading-errors` replaces it with the
-same shape at 22x the output — one wrong field type, 156 diagnostics, one edit
-that removes every one.
-
-That task's first measurement is that **no level of this filter reduces it**:
-49,864 bytes becomes 49,708 at level 2, 0.3%. 156 diagnostics that a reader
-would call the same error are 156 distinct blocks to the ranking, which has no
-notion of one root cause reported at many sites. The old task was too small to
-show it.
-
-So a single-agent curve measures the agent's habits as much as the filter's
-quality — how readily it chases a marker, how much it re-reads. Any claim about
-this tool that rests on one agent's numbers is a claim about that agent. Both
-files are committed for that reason, and a change to ranking or to the marker is
-judged against both.
+Level 0 costs more than showing the output on three tasks of four, as it has in
+every curve so far.
 
 ### The trap the suite was missing
 
