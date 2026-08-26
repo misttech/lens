@@ -106,26 +106,43 @@ The number it exists to produce is the knee: where task success starts to fall.
 A run reporting 90% fewer tokens and 60% success is a worse tool than one
 reporting 70% fewer and 100%.
 
-### What the first baseline says
+### What the Sonnet curve says
 
-`bench/results/retention-baseline.json`, three tasks against Sonnet 5, three runs
-per cell: **task success is 100% everywhere, and filtering costs more total model
-tokens than not filtering** in eight of nine cells — from 0.98x to 1.72x the raw
-control. Only one cell wins.
+`bench/results/retention-baseline.json`, five tasks against Sonnet 5, three runs
+per cell, recorded after cause grouping, the classify shapes, excerpt
+suppression and the level 1 fix. Success is 100% in all 60 cells and there is no
+knee.
 
-The cause was in the tool, not the tasks. Traced with a real run: the agent runs
-the filtered command, reads the marker, and then runs `lens show <handle>
---level 3`, which hands back the entire raw output. It pays for both views and an
-extra turn, and the 99.8% reduction on the way in buys nothing.
+| task | raw | level 2 | level 1 | level 0 |
+|---|---|---|---|---|
+| cargo-cascade | 1.00 | 1.00 | 1.00 | 2.32 |
+| cascading-errors | 1.00 | 0.99 | 1.17 | 2.96 |
+| fix-failing-test | 1.00 | 0.97 | 0.78 | 1.32 |
+| last-line-trap | 1.00 | 0.99 | 1.00 | 1.44 |
+| mid-stream-trap | 1.00 | 0.79 | 1.01 | 1.92 |
 
-So the marker was doing something the design did not intend. It read as an
-instruction rather than an offer, and the level it named is the most expensive
-one there is. It now describes what is missing and names no command. This file
-predates that change and is kept as the evidence for it — the Sonnet curve has
-not been re-recorded since, so it says what was wrong, not where the tool stands.
+**Level 2 is free and mostly does nothing.** Four of five tasks land between 0.97
+and 1.00 while reading a fraction of the bytes — 1,453 of 49,556 on
+`cargo-cascade`, and the session costs the same. The tool calls say why: four
+against four, six against six. This agent does the same work either way, so
+what the filter saves on the way in is not what the session is made of.
 
-This is the harness working. The compression looked excellent and the thing that
-matters was going the wrong way.
+**Level 0 is the worst view in the tree, and by a distance.** 2.32x on
+`cargo-cascade` with nine tool calls against four, 2.96x on `cascading-errors`
+with fifteen against six. A view that reports counts instead of content sends
+the agent to do the reading itself, and it does two to three times the work. It
+has cost more than raw in every curve recorded here.
+
+The one clear win is `mid-stream-trap` at 0.79, where the answer is a single
+line in the middle of 4,800 and the filter hands it over directly.
+
+### What the first baseline said
+
+The curve this replaced was recorded before the elision marker stopped naming
+`lens show --level 3`. It reported filtering costing more than not filtering in
+eight of nine cells, traced to agents reading the marker as an instruction and
+fetching the whole raw output. That is the finding the marker change came from,
+and the numbers above are what the same agent does now.
 
 ### The same curve through a second agent
 
