@@ -102,6 +102,13 @@ model judges another model's work. It prints its plan and spends nothing unless
 given `--run`, because a benchmark that can charge you by accident is one nobody
 runs twice.
 
+A cell the agent never finished is excluded rather than counted. Zero tokens
+means it never started; a non-zero exit means it started and was cut off, and
+the tokens it spent before that say nothing about whether the view was enough.
+Both are cells the sweep did not get, and neither is the filter losing — a sweep
+blocked partway once recorded a cell that had spent 13,493 tokens as a failure,
+and the curve came back with a knee that was not there.
+
 The number it exists to produce is the knee: where task success starts to fall.
 A run reporting 90% fewer tokens and 60% success is a worse tool than one
 reporting 70% fewer and 100%.

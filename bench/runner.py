@@ -139,7 +139,15 @@ RETRY_PAUSE_S = 20
 
 
 def attempted(result: dict) -> bool:
-    """Did the agent actually try? Zero tokens means it never started."""
+    """Did the agent actually try, and get to finish?
+
+    Zero tokens means it never started. A non-zero exit means it started and
+    was cut off — a credential, a limit, a crash — and the tokens it spent
+    before that say nothing about whether the view was enough to do the work.
+    Both are cells the sweep did not get, and neither is the filter losing.
+    """
+    if result.get("harness_error"):
+        return False
     return total_model_tokens(result.get("usage", {}) or {}) > 0
 
 
@@ -370,9 +378,12 @@ def run_agent(
 
     if proc.returncode != 0:
         # A cell that failed for a reason outside the thing being measured has
-        # to say so. Silently scoring it as a task failure would blame the
-        # filter for the harness.
+        # to say so, and be excluded rather than counted. Scoring it as a task
+        # failure blames the filter for the harness — measured happening: a
+        # sweep cut off partway recorded a cell that had spent 13,493 tokens as
+        # a failure, and the curve came back with a knee that was not there.
         last = [line for line in proc.stderr.splitlines() if line.strip()]
+        result["harness_error"] = True
         result["subtype"] = (
             f"agent exit {proc.returncode}: {last[-1][:120] if last else ''}"
         )
